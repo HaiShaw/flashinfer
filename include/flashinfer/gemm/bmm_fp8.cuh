@@ -16,8 +16,15 @@
 #ifndef FLASHINFER_GEMM_BMM_FP8_CUH_
 #define FLASHINFER_GEMM_BMM_FP8_CUH_
 
+#include "../gpu_defines_cuda_hip.h"
+
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#include <hipblaslt.h>
+#include <hip/hip_fp8.h>
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #include <cublasLt.h>
 #include <cuda_fp8.h>
+#endif
 
 #include <iostream>
 #include <memory>
@@ -45,7 +52,7 @@
 #else
 #define FLASHINFER_CUBLAS_CALL(EXPR)  \
   {                                   \
-    cudaError_t e = (EXPR);           \
+    gpuError_t e = (EXPR);            \
     if (e != CUBLAS_STATUS_SUCCESS) { \
       return e;                       \
     }                                 \
@@ -141,7 +148,7 @@ template <typename AT, typename BT, typename DT>
 cublasStatus_t bmm_fp8_internal_cublaslt(void* workspace, size_t workspace_size_in_bytes,
                                          const AT* A, const BT* B, DT* D, int batch_size, int m,
                                          int n, int k, const float* A_scale, const float* B_scale,
-                                         cublasLtHandle_t lt_handle, cudaStream_t stream) {
+                                         cublasLtHandle_t lt_handle, gpuStream_t stream) {
   const void* A_scale_ptr = static_cast<const void*>(A_scale);
   const void* B_scale_ptr = static_cast<const void*>(B_scale);
   auto matmul_desp = CuBlasLtMatmulDescriptor(CUBLAS_COMPUTE_32F, CUDA_R_32F);

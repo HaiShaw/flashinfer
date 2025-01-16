@@ -13,6 +13,7 @@ from .env import FLASHINFER_GEN_SRC_DIR as FLASHINFER_GEN_SRC_DIR
 from .env import FLASHINFER_INCLUDE_DIR as FLASHINFER_INCLUDE_DIR
 from .env import FLASHINFER_JIT_DIR as FLASHINFER_JIT_DIR
 from .env import FLASHINFER_WORKSPACE_DIR as FLASHINFER_WORKSPACE_DIR
+from flashinfer.utils import check_hip_availability, check_cuda_availability
 
 os.makedirs(FLASHINFER_WORKSPACE_DIR, exist_ok=True)
 os.makedirs(FLASHINFER_CSRC_DIR, exist_ok=True)
@@ -52,6 +53,17 @@ def check_cuda_arch():
             raise RuntimeError("FlashInfer requires sm75+")
 
 
+# TODO
+def check_rocm_arch():
+    # TODO
+    # allowed_archs = ["native", "gfx90a", "gfx940", "gfx941", "gfx942"]
+    for rocm_arch_flags in torch_cpp_ext._get_rocm_arch_flags():
+        # arch = str(re.search(r"\-\-offload\-arch=(\w+)", rocm_arch_flags).group(1))
+        # if arch not in allowed_archs:
+            # raise RuntimeError("AMD ROCm archs mismatch")
+        pass
+
+
 def clear_cache_dir():
     if os.path.exists(FLASHINFER_JIT_DIR):
         for file in os.listdir(FLASHINFER_JIT_DIR):
@@ -72,6 +84,31 @@ def remove_unwanted_pytorch_nvcc_flags():
             pass
 
 
+# TODO
+def remove_unwanted_pytorch_hip_flags():
+    REMOVE_HIP_FLAGS = []
+    for flag in REMOVE_HIP_FLAGS:
+        try:
+            torch_cpp_ext.COMMON_HIP_FLAGS.remove(flag)
+        except ValueError:
+            pass
+
+
+# TODO
+def remove_unwanted_pytorch_hipcc_flags():
+    REMOVE_HIPCC_FLAGS = []
+    for flag in REMOVE_HIPCC_FLAGS:
+        try:
+            torch_cpp_ext.COMMON_HIPCC_FLAGS.remove(flag)
+        except ValueError:
+            pass
+
+
+remove_unwanted_pytorch_nvcc_flags()
+if check_hip_availability():
+    remove_unwanted_pytorch_hip_flags()
+    remove_unwanted_pytorch_hipcc_flags()
+
 remove_unwanted_pytorch_nvcc_flags()
 
 sm90a_nvcc_flags = ["-gencode", "arch=compute_90a,code=sm_90a"]
@@ -86,27 +123,39 @@ def load_cuda_ops(
     extra_include_paths=None,
     verbose=False,
 ):
-    cflags = ["-O3", "-Wno-switch-bool"]
-    cuda_cflags = [
-        "-O3",
-        "-std=c++17",
-        "--threads",
-        "4",
-        "-use_fast_math",
-        "-DFLASHINFER_ENABLE_BF16",
-        "-DFLASHINFER_ENABLE_FP8",
-    ]
+    cflags = ["-O3"]
+    cuda_cflags = ["-O3", "-std=c++17", "-DFLASHINFER_ENABLE_BF16", "-DFLASHINFER_ENABLE_FP8"]
+    with_cuda = True
+    if check_hip_availability():
+        print("Setting extra flags for ROCm/HIP")
+        with_cuda = None
+        # cflags += ["-x", "hip"]
+        # FIXME
+        cflags += ["-I/opt/rocm/include", "-D__HIP_PLATFORM_AMD__"]
+        cuda_cflags += ["--offload-arch=gfx942", "-ffast-math", "-I/opt/rocm/include", "-L/opt/rocm/lib", "-lamdhip64", "-D__HIP_PLATFORM_AMD__"]
+    else:
+        print("Setting extra flags for CUDA")
+        cflags += ["-Wno-switch-bool"]
+        cuda_cflags += ["--threads", "4", "-use_fast_math"]
+
     cflags += extra_cflags
     cuda_cflags += extra_cuda_cflags
     logger.info(f"Loading JIT ops: {name}")
-    check_cuda_arch()
+    if check_cuda_availability():
+        check_cuda_arch()
+    elif check_hip_availability():
+        check_rocm_arch()
     build_directory = FLASHINFER_JIT_DIR / name
     os.makedirs(build_directory, exist_ok=True)
     if extra_include_paths is None:
         extra_include_paths = [
             FLASHINFER_INCLUDE_DIR,
             FLASHINFER_CSRC_DIR,
-        ] + CUTLASS_INCLUDE_DIRS
+        ]
+        if check_hip_availability():
+            extra_include_paths += []
+        elif check_cuda_availability():
+            extra_include_paths += CUTLASS_INCLUDE_DIRS
     lock = FileLock(FLASHINFER_JIT_DIR / f"{name}.lock", thread_local=False)
     with lock:
         module = torch_cpp_ext.load(
@@ -118,7 +167,7 @@ def load_cuda_ops(
             extra_include_paths=list(map(lambda _: str(_), extra_include_paths)),
             build_directory=build_directory,
             verbose=verbose,
-            with_cuda=True,
+            with_cuda=with_cuda,
         )
     logger.info(f"Finished loading JIT ops: {name}")
     return module

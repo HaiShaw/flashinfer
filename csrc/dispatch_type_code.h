@@ -14,9 +14,18 @@
  * limitations under the License.
  */
 #pragma once
+
+#include <flashinfer/gpu_defines_cuda_hip.h>
+
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#include <hip/hip_bf16.h>
+#include <hip/hip_fp16.h>
+#include <hip/hip_fp8.h>
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
+#endif
 #include <flashinfer/exception.h>
 
 #include <sstream>
@@ -45,11 +54,11 @@ enum class TypeCode {
   [&]() -> bool {                                                                    \
     switch (TypeCode(type_code)) {                                                   \
       case TypeCode::kFloat16: {                                                     \
-        using c_type = nv_half;                                                      \
+        using c_type = __half;                                                       \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       case TypeCode::kBFloat16: {                                                    \
-        using c_type = nv_bfloat16;                                                  \
+        using c_type = gpu_bfloat16;                                                 \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       default:                                                                       \
@@ -64,7 +73,7 @@ enum class TypeCode {
   [&]() -> bool {                                                                    \
     switch (TypeCode(type_code)) {                                                   \
       case TypeCode::kFloat16: {                                                     \
-        using c_type = nv_half;                                                      \
+        using c_type = __half;                                                       \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       default:                                                                       \
@@ -81,11 +90,11 @@ enum class TypeCode {
   [&]() -> bool {                                                                    \
     switch (TypeCode(type_code)) {                                                   \
       case TypeCode::kFloat8_e4m3fn: {                                               \
-        using c_type = __nv_fp8_e4m3;                                                \
+        using c_type = __gpu_fp8_e4m3;                                               \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       case TypeCode::kFloat8_e5m2: {                                                 \
-        using c_type = __nv_fp8_e5m2;                                                \
+        using c_type = __gpu_fp8_e5m2;                                               \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       default:                                                                       \
@@ -110,19 +119,19 @@ enum class TypeCode {
   [&]() -> bool {                                                                    \
     switch (TypeCode(type_code)) {                                                   \
       case TypeCode::kFloat16: {                                                     \
-        using c_type = nv_half;                                                      \
+        using c_type = __half;                                                       \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       case TypeCode::kBFloat16: {                                                    \
-        using c_type = nv_bfloat16;                                                  \
+        using c_type = gpu_bfloat16;                                                 \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       case TypeCode::kFloat8_e4m3fn: {                                               \
-        using c_type = __nv_fp8_e4m3;                                                \
+        using c_type = __gpu_fp8_e4m3;                                               \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       case TypeCode::kFloat8_e5m2: {                                                 \
-        using c_type = __nv_fp8_e5m2;                                                \
+        using c_type = __gpu_fp8_e5m2;                                               \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       default:                                                                       \
@@ -137,11 +146,11 @@ enum class TypeCode {
   [&]() -> bool {                                                                    \
     switch (TypeCode(type_code)) {                                                   \
       case TypeCode::kFloat16: {                                                     \
-        using c_type = nv_half;                                                      \
+        using c_type = __half;                                                       \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       case TypeCode::kBFloat16: {                                                    \
-        using c_type = nv_bfloat16;                                                  \
+        using c_type = gpu_bfloat16;                                                 \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       default:                                                                       \
@@ -156,15 +165,15 @@ enum class TypeCode {
   [&]() -> bool {                                                                    \
     switch (TypeCode(type_code)) {                                                   \
       case TypeCode::kFloat16: {                                                     \
-        using c_type = nv_half;                                                      \
+        using c_type = __half;                                                       \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       case TypeCode::kFloat8_e4m3fn: {                                               \
-        using c_type = __nv_fp8_e4m3;                                                \
+        using c_type = __gpu_fp8_e4m3;                                               \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       case TypeCode::kFloat8_e5m2: {                                                 \
-        using c_type = __nv_fp8_e5m2;                                                \
+        using c_type = __gpu_fp8_e5m2;                                               \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       default:                                                                       \
@@ -179,7 +188,7 @@ enum class TypeCode {
   [&]() -> bool {                                                                    \
     switch (TypeCode(type_code)) {                                                   \
       case TypeCode::kFloat16: {                                                     \
-        using c_type = nv_half;                                                      \
+        using c_type = __half;                                                       \
         return __VA_ARGS__();                                                        \
       }                                                                              \
       default:                                                                       \

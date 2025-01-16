@@ -15,11 +15,22 @@
  */
 #ifndef FLASHINFER_PREFILL_CUH_
 #define FLASHINFER_PREFILL_CUH_
+
+#include "../gpu_defines_cuda_hip.h"
+
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#include <hip/hip_cooperative_groups.h>
+#include <hip/hip_bf16.h>
+#include <hip/hip_fp16.h>
+#include <hip/hip_fp8.h>
+#include <hip/hip_runtime.h>
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #include <cooperative_groups.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
+#endif
 
 #include "../cp_async.cuh"
 #include "../fastdiv.cuh"
@@ -34,6 +45,36 @@
 #include "cascade.cuh"
 #include "mask.cuh"
 #include "variants.cuh"
+
+
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+// TODO: Better place to put these custom functions.
+__device__ __hip_bfloat162 convert_half2_to_bfloat162(const __half2 h2) {
+  // Extract the two FP16 components.
+  __half h0 = __low2half(h2);  // Lower half of __half2.
+  __half h1 = __high2half(h2);  // Higher half of __half2.
+
+  // Manually convert to BF16 by truncating the mantissa.
+  __hip_bfloat16 bf0 = __float2bfloat16(__half2float(h0));
+  __hip_bfloat16 bf1 = __float2bfloat16(__half2float(h1));
+
+  // Combine the two BF16 components into a __hip_bfloat162.
+  return __hip_bfloat162(bf0, bf1);
+}
+
+__device__ __half2 convert_bfloat162_to_half2(const __hip_bfloat162 bf2) {
+  // Extract the two BF16 components.
+  __hip_bfloat16 bf0 = __low2bfloat16(bf2);
+  __hip_bfloat16 bf1 = __high2bfloat16(bf2);
+
+  // Convert BF16 to FP16.
+  __half h0 = __float2half(__bfloat162float(bf0));
+  __half h1 = __float2half(__bfloat162float(bf1));
+
+  // Combine into a __half2.
+  return __halves2half2(h0, h1);
+}
+#endif
 
 namespace flashinfer {
 
@@ -746,15 +787,31 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant,
           m_prev[j] = m[mma_q][j];
 #pragma unroll
           for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+            __hip_bfloat162 temp_bf162 = __hmax2(convert_half2_to_bfloat162(*(half2*)&s_frag[mma_q][mma_kv][j * 2]),
+                                                 convert_half2_to_bfloat162(*(half2*)&s_frag[mma_q][mma_kv][j * 2 + 4]));
+            half2 m_local = convert_bfloat162_to_half2(temp_bf162);
+#else
             half2 m_local = __hmax2(*(half2*)&s_frag[mma_q][mma_kv][j * 2],
                                     *(half2*)&s_frag[mma_q][mma_kv][j * 2 + 4]);
+#endif
             m[mma_q][j] = __hmax(m[mma_q][j], __hmax(m_local.x, m_local.y));
           }
         }
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+        __hip_bfloat162 temp_bf162 = __hmax2(convert_half2_to_bfloat162(*(half2*)&m[mma_q]),
+                                             convert_half2_to_bfloat162(math::shfl_xor_sync(*(half2*)&m[mma_q], 0x2)));
+        *(half2*)&m[mma_q] = convert_bfloat162_to_half2(temp_bf162);
+
+        temp_bf162 = __hmax2(convert_half2_to_bfloat162(*(half2*)&m[mma_q]),
+                             convert_half2_to_bfloat162(math::shfl_xor_sync(*(half2*)&m[mma_q], 0x1)));
+        *(half2*)&m[mma_q] = convert_bfloat162_to_half2(temp_bf162);
+#else
         *(half2*)&m[mma_q] =
             __hmax2(*(half2*)&m[mma_q], math::shfl_xor_sync(*(half2*)&m[mma_q], 0x2));
         *(half2*)&m[mma_q] =
             __hmax2(*(half2*)&m[mma_q], math::shfl_xor_sync(*(half2*)&m[mma_q], 0x1));
+#endif
 #pragma unroll
         for (uint32_t j = 0; j < 2; ++j) {
           float o_scale = math::ptx_exp2(float(m_prev[j] - m[mma_q][j]));
@@ -1110,10 +1167,14 @@ template <MaskMode MASK_MODE, PosEncodingMode POS_ENCODING_MODE, uint32_t NUM_MM
 __global__
 __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void SinglePrefillWithKVCacheKernel(
     const uint_fastdiv group_size,
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+    const typename AttentionVariant::ParamsT params) {
+#else
     const __grid_constant__ typename AttentionVariant::ParamsT params) {
+#endif
   using DTypeQ = typename AttentionVariant::DTypeQ;
 #if (__CUDA_ARCH__ < 800)
-  if constexpr (std::is_same_v<DTypeQ, nv_bfloat16>) {
+  if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
     FLASHINFER_RUNTIME_ASSERT("Prefill kernels do not support bf16 on sm75.");
   } else {
 #endif
@@ -1366,9 +1427,9 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void SinglePrefillWithKV
 
 template <uint32_t HEAD_DIM, PosEncodingMode POS_ENCODING_MODE, bool ALLOW_FP16_QK_REDUCTION,
           MaskMode MASK_MODE, typename AttentionVariant>
-cudaError_t SinglePrefillWithKVCacheDispatched(typename AttentionVariant::ParamsT params,
-                                               typename AttentionVariant::DTypeO* tmp,
-                                               cudaStream_t stream) {
+gpuError_t SinglePrefillWithKVCacheDispatched(typename AttentionVariant::ParamsT params,
+                                              typename AttentionVariant::DTypeO* tmp,
+                                              gpuStream_t stream) {
   using DTypeQ = typename AttentionVariant::DTypeQ;
   using DTypeKV = typename AttentionVariant::DTypeKV;
   using DTypeO = typename AttentionVariant::DTypeO;
@@ -1418,10 +1479,10 @@ cudaError_t SinglePrefillWithKVCacheDispatched(typename AttentionVariant::Params
                                   float>::type;
 
     int dev_id = 0;
-    FLASHINFER_CUDA_CALL(cudaGetDevice(&dev_id));
+    FLASHINFER_CUDA_CALL(gpuGetDevice(&dev_id));
     int max_smem_per_sm = 0;
-    FLASHINFER_CUDA_CALL(cudaDeviceGetAttribute(
-        &max_smem_per_sm, cudaDevAttrMaxSharedMemoryPerMultiprocessor, dev_id));
+    FLASHINFER_CUDA_CALL(gpuDeviceGetAttribute(
+        &max_smem_per_sm, gpuDevAttrMaxSharedMemoryPerMultiprocessor, dev_id));
     // we expect each sm execute two threadblocks
     // TODO(Zihao): fix the following computation
     const int num_ctas_per_sm = max_smem_per_sm > (16 * HEAD_DIM * sizeof(DTypeQ) * 16) ? 2 : 1;
@@ -1460,12 +1521,12 @@ cudaError_t SinglePrefillWithKVCacheDispatched(typename AttentionVariant::Params
                               NUM_MMA_KV * NUM_WARPS_KV * 2 * sizeof(DTypeQ)) *
                              16 * HEAD_DIM;
         FLASHINFER_CUDA_CALL(
-            cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+            gpuFuncSetAttribute(kernel, gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
         int num_blocks_per_sm = 0;
         int num_sm = 0;
         FLASHINFER_CUDA_CALL(
-            cudaDeviceGetAttribute(&num_sm, cudaDevAttrMultiProcessorCount, dev_id));
-        FLASHINFER_CUDA_CALL(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            gpuDeviceGetAttribute(&num_sm, gpuDevAttrMultiProcessorCount, dev_id));
+        FLASHINFER_CUDA_CALL(gpuOccupancyMaxActiveBlocksPerMultiprocessor(
             &num_blocks_per_sm, kernel, num_threads, smem_size));
         uint32_t max_num_kv_chunks =
             (num_blocks_per_sm * num_sm) /
@@ -1485,7 +1546,7 @@ cudaError_t SinglePrefillWithKVCacheDispatched(typename AttentionVariant::Params
           dim3 nblks(ceil_div(qo_len * group_size, num_rows_per_cta), 1, num_kv_heads);
           dim3 nthrs(32, NUM_WARPS_Q, NUM_WARPS_KV);
           FLASHINFER_CUDA_CALL(
-              cudaLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
+              gpuLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
         } else {
           // Use cooperative groups to increase occupancy
           params.partition_kv = true;
@@ -1498,7 +1559,7 @@ cudaError_t SinglePrefillWithKVCacheDispatched(typename AttentionVariant::Params
           dim3 nblks(ceil_div(qo_len * group_size, num_rows_per_cta), num_chunks, num_kv_heads);
           dim3 nthrs(32, NUM_WARPS_Q, NUM_WARPS_KV);
           FLASHINFER_CUDA_CALL(
-              cudaLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
+              gpuLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
           if constexpr (AttentionVariant::use_softmax) {
             FLASHINFER_CUDA_CALL(MergeStates(tmp, tmp_lse, o, lse, num_chunks, qo_len, num_qo_heads,
                                              HEAD_DIM, stream));
@@ -1510,7 +1571,7 @@ cudaError_t SinglePrefillWithKVCacheDispatched(typename AttentionVariant::Params
       }
     })
   });
-  return cudaSuccess;
+  return gpuSuccess;
 }
 
 template <MaskMode MASK_MODE, PosEncodingMode POS_ENCODING_MODE, uint32_t NUM_MMA_Q,
@@ -1519,10 +1580,14 @@ template <MaskMode MASK_MODE, PosEncodingMode POS_ENCODING_MODE, uint32_t NUM_MM
 __global__
 __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithRaggedKVCacheKernel(
     const uint_fastdiv group_size,
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+    const typename AttentionVariant::ParamsT params) {
+#else
     const __grid_constant__ typename AttentionVariant::ParamsT params) {
+#endif
   using DTypeQ = typename AttentionVariant::DTypeQ;
 #if (__CUDA_ARCH__ < 800)
-  if constexpr (std::is_same_v<DTypeQ, nv_bfloat16>) {
+  if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
     FLASHINFER_RUNTIME_ASSERT("Prefill kernels do not support bf16 on sm75.");
   } else {
 #endif
@@ -1813,10 +1878,14 @@ template <MaskMode MASK_MODE, PosEncodingMode POS_ENCODING_MODE, uint32_t NUM_MM
 __global__
 __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPagedKVCacheKernel(
     const uint_fastdiv group_size,
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+    const typename AttentionVariant::ParamsT params) {
+#else
     const __grid_constant__ typename AttentionVariant::ParamsT params) {
+#endif
   using DTypeQ = typename AttentionVariant::DTypeQ;
 #if (__CUDA_ARCH__ < 800)
-  if constexpr (std::is_same_v<DTypeQ, nv_bfloat16>) {
+  if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
     FLASHINFER_RUNTIME_ASSERT("Prefill kernels do not support bf16 on sm75.");
   } else {
 #endif
@@ -2112,9 +2181,9 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
 
 template <uint32_t CTA_TILE_Q, uint32_t HEAD_DIM, PosEncodingMode POS_ENCODING_MODE,
           bool ALLOW_FP16_QK_REDUCTION, MaskMode MASK_MODE, typename AttentionVariant>
-cudaError_t BatchPrefillWithRaggedKVCacheDispatched(typename AttentionVariant::ParamsT params,
-                                                    typename AttentionVariant::DTypeO* tmp_v,
-                                                    float* tmp_s, cudaStream_t stream) {
+gpuError_t BatchPrefillWithRaggedKVCacheDispatched(typename AttentionVariant::ParamsT params,
+                                                   typename AttentionVariant::DTypeO* tmp_v,
+                                                   float* tmp_s, gpuStream_t stream) {
   using DTypeQ = typename AttentionVariant::DTypeQ;
   using DTypeKV = typename AttentionVariant::DTypeKV;
   const uint32_t padded_batch_size = params.padded_batch_size;
@@ -2128,7 +2197,7 @@ cudaError_t BatchPrefillWithRaggedKVCacheDispatched(typename AttentionVariant::P
   if (padded_batch_size == 0) {
     // No request, skip
     // this won't happen in CUDAGraph mode because we fixed the padded_batch_size
-    return cudaSuccess;
+    return gpuSuccess;
   }
 
   dim3 nblks(padded_batch_size, 1, num_kv_heads);
@@ -2139,10 +2208,10 @@ cudaError_t BatchPrefillWithRaggedKVCacheDispatched(typename AttentionVariant::P
                                 float>::type;
 
   int dev_id = 0;
-  FLASHINFER_CUDA_CALL(cudaGetDevice(&dev_id));
+  FLASHINFER_CUDA_CALL(gpuGetDevice(&dev_id));
   int max_smem_per_sm = 0;
-  FLASHINFER_CUDA_CALL(cudaDeviceGetAttribute(&max_smem_per_sm,
-                                              cudaDevAttrMaxSharedMemoryPerMultiprocessor, dev_id));
+  FLASHINFER_CUDA_CALL(gpuDeviceGetAttribute(&max_smem_per_sm,
+                                             gpuDevAttrMaxSharedMemoryPerMultiprocessor, dev_id));
   // we expect each sm execute two threadblocks
   // TODO(Zihao): fix the following computation
   const int num_ctas_per_sm = max_smem_per_sm > (16 * HEAD_DIM * sizeof(DTypeQ) * 16) ? 2 : 1;
@@ -2179,13 +2248,13 @@ cudaError_t BatchPrefillWithRaggedKVCacheDispatched(typename AttentionVariant::P
                                               NUM_MMA_KV, NUM_WARPS_Q, NUM_WARPS_KV, DTypeQKAccum,
                                               AttentionVariant>;
       FLASHINFER_CUDA_CALL(
-          cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+          gpuFuncSetAttribute(kernel, gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
       if (tmp_v == nullptr) {
         // do not partition kv
         params.partition_kv = false;
         void* args[] = {(void*)&group_size_fastdiv, (void*)&params};
         FLASHINFER_CUDA_CALL(
-            cudaLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
+            gpuLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
       } else {
         // partition kv
         params.partition_kv = true;
@@ -2195,7 +2264,7 @@ cudaError_t BatchPrefillWithRaggedKVCacheDispatched(typename AttentionVariant::P
         params.lse = tmp_s;
         void* args[] = {(void*)&group_size_fastdiv, (void*)&params};
         FLASHINFER_CUDA_CALL(
-            cudaLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
+            gpuLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
         if constexpr (AttentionVariant::use_softmax) {
           FLASHINFER_CUDA_CALL(VariableLengthMergeStates(
               tmp_v, tmp_s, params.merge_indptr, o, lse, params.max_total_num_rows,
@@ -2208,14 +2277,14 @@ cudaError_t BatchPrefillWithRaggedKVCacheDispatched(typename AttentionVariant::P
       }
     }
   });
-  return cudaSuccess;
+  return gpuSuccess;
 }
 
 template <uint32_t CTA_TILE_Q, uint32_t HEAD_DIM, PosEncodingMode POS_ENCODING_MODE,
           bool ALLOW_FP16_QK_REDUCTION, MaskMode MASK_MODE, typename AttentionVariant>
-cudaError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::ParamsT params,
-                                                   typename AttentionVariant::DTypeO* tmp_v,
-                                                   float* tmp_s, cudaStream_t stream) {
+gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::ParamsT params,
+                                                  typename AttentionVariant::DTypeO* tmp_v,
+                                                  float* tmp_s, gpuStream_t stream) {
   using DTypeQ = typename AttentionVariant::DTypeQ;
   using DTypeKV = typename AttentionVariant::DTypeKV;
   const uint32_t padded_batch_size = params.padded_batch_size;
@@ -2229,7 +2298,7 @@ cudaError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Pa
   if (padded_batch_size == 0) {
     // No request, skip
     // this won't happen in CUDAGraph mode because we fixed the padded_batch_size
-    return cudaSuccess;
+    return gpuSuccess;
   }
 
   dim3 nblks(padded_batch_size, 1, num_kv_heads);
@@ -2241,10 +2310,10 @@ cudaError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Pa
                                 float>::type;
 
   int dev_id = 0;
-  FLASHINFER_CUDA_CALL(cudaGetDevice(&dev_id));
+  FLASHINFER_CUDA_CALL(gpuGetDevice(&dev_id));
   int max_smem_per_sm = 0;
-  FLASHINFER_CUDA_CALL(cudaDeviceGetAttribute(&max_smem_per_sm,
-                                              cudaDevAttrMaxSharedMemoryPerMultiprocessor, dev_id));
+  FLASHINFER_CUDA_CALL(gpuDeviceGetAttribute(&max_smem_per_sm,
+                                             gpuDevAttrMaxSharedMemoryPerMultiprocessor, dev_id));
   // we expect each sm execute two threadblocks
   // TODO(Zihao): fix the following computation
   const int num_ctas_per_sm = max_smem_per_sm > (16 * HEAD_DIM * sizeof(DTypeQ) * 16) ? 2 : 1;
@@ -2281,13 +2350,13 @@ cudaError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Pa
                                              NUM_MMA_KV, NUM_WARPS_Q, NUM_WARPS_KV, DTypeQKAccum,
                                              AttentionVariant>;
       FLASHINFER_CUDA_CALL(
-          cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+          gpuFuncSetAttribute(kernel, gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
       if (tmp_v == nullptr) {
         // do not partition kv
         params.partition_kv = false;
         void* args[] = {(void*)&group_size_fastdiv, (void*)&params};
         FLASHINFER_CUDA_CALL(
-            cudaLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
+            gpuLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
       } else {
         params.partition_kv = true;
         auto o = params.o;
@@ -2296,7 +2365,7 @@ cudaError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Pa
         params.lse = tmp_s;
         void* args[] = {(void*)&group_size_fastdiv, (void*)&params};
         FLASHINFER_CUDA_CALL(
-            cudaLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
+            gpuLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
         if constexpr (AttentionVariant::use_softmax) {
           FLASHINFER_CUDA_CALL(VariableLengthMergeStates(
               tmp_v, tmp_s, params.merge_indptr, o, lse, params.max_total_num_rows,
@@ -2309,7 +2378,7 @@ cudaError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Pa
       }
     }
   });
-  return cudaSuccess;
+  return gpuSuccess;
 }
 
 }  // namespace flashinfer

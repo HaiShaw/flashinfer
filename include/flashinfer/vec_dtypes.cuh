@@ -16,12 +16,48 @@
 #ifndef VEC_DTYPES_CUH_
 #define VEC_DTYPES_CUH_
 
+#include "./gpu_defines_cuda_hip.h"
+
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#include <hip/hip_bf16.h>
+#include <hip/hip_fp16.h>
+#include <hip/hip_fp8.h>
+#include <hip/hip_runtime.h>
+#include <math.h>
+#include <float.h>
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
+#endif
 
 #include <type_traits>
+
+#define FLASHINFER_INLINE inline __attribute__((always_inline)) __device__
+
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+/*
+Hacky workaround for the error below:
+
+  /home/git_repos/glen-amd/flashinfer/include/flashinfer/attention/../vec_dtypes_hip.cuh:200:38: error: use of undeclared identifier '__float2bfloat162_rn'; did you mean '__float22bfloat162_rn'?
+    200 |       const gpu_bfloat162 bias_reg = __float2bfloat162_rn(*reinterpret_cast<const float*>(&BIAS));
+        |                                      ^~~~~~~~~~~~~~~~~~~~
+        |                                      __float22bfloat162_rn
+  /opt/rocm-6.3.1/lib/llvm/bin/../../../include/hip/amd_detail/amd_hip_bf16.h:574:45: note: '__float22bfloat162_rn' declared here
+    574 | __BF16_HOST_DEVICE_STATIC__ __hip_bfloat162 __float22bfloat162_rn(const float2 a) {
+*/
+__HOST_DEVICE__ inline __hip_bfloat162 __float2bfloat162_rn(const float a) {
+  return __hip_bfloat162{__float2bfloat16(a), __float2bfloat16(a)};
+}
+
+FLASHINFER_INLINE __gpu_bfloat162 make_bfloat162(const __gpu_bfloat16 x, const __gpu_bfloat16 y) {
+  __gpu_bfloat162 t;
+  t.x = x;
+  t.y = y;
+  return t;
+}
+#endif
 
 namespace flashinfer {
 
@@ -34,15 +70,15 @@ namespace flashinfer {
 #if (__CUDACC_VER_MAJOR__ * 10000 + __CUDACC_VER_MINOR__ * 100 < 120400) && \
     (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < 800))
 // CUDA version < 12.4 and GPU architecture < 80
-FLASHINFER_INLINE __nv_bfloat162 make_bfloat162(const __nv_bfloat16 x, const __nv_bfloat16 y) {
-  __nv_bfloat162 t;
+FLASHINFER_INLINE __gpu_bfloat162 make_bfloat162(const __gpu_bfloat16 x, const __gpu_bfloat16 y) {
+  __gpu_bfloat162 t;
   t.x = x;
   t.y = y;
   return t;
 }
 
-FLASHINFER_INLINE __nv_bfloat16 __hmul(const __nv_bfloat16 a, const __nv_bfloat16 b) {
-  __nv_bfloat16 val;
+FLASHINFER_INLINE __gpu_bfloat16 __hmul(const __gpu_bfloat16 a, const __gpu_bfloat16 b) {
+  __gpu_bfloat16 val;
   const float fa = __bfloat162float(a);
   const float fb = __bfloat162float(b);
   // avoid ftz in device code
@@ -50,28 +86,28 @@ FLASHINFER_INLINE __nv_bfloat16 __hmul(const __nv_bfloat16 a, const __nv_bfloat1
   return val;
 }
 
-FLASHINFER_INLINE __nv_bfloat162 __hmul2(const __nv_bfloat162 a, const __nv_bfloat162 b) {
-  __nv_bfloat162 val;
+FLASHINFER_INLINE __gpu_bfloat162 __hmul2(const __gpu_bfloat162 a, const __gpu_bfloat162 b) {
+  __gpu_bfloat162 val;
   val.x = __hmul(a.x, b.x);
   val.y = __hmul(a.y, b.y);
   return val;
 }
 
-FLASHINFER_INLINE __nv_bfloat162 __floats2bfloat162_rn(const float a, const float b) {
-  __nv_bfloat162 val;
-  val = __nv_bfloat162(__float2bfloat16_rn(a), __float2bfloat16_rn(b));
+FLASHINFER_INLINE __gpu_bfloat162 __floats2bfloat162_rn(const float a, const float b) {
+  __gpu_bfloat162 val;
+  val = __gpu_bfloat162(__float2bfloat16_rn(a), __float2bfloat16_rn(b));
   return val;
 }
 
-FLASHINFER_INLINE __nv_bfloat162 __float22bfloat162_rn(const float2 a) {
-  __nv_bfloat162 val = __floats2bfloat162_rn(a.x, a.y);
+FLASHINFER_INLINE __gpu_bfloat162 __float22bfloat162_rn(const float2 a) {
+  __gpu_bfloat162 val = __floats2bfloat162_rn(a.x, a.y);
   return val;
 }
-FLASHINFER_INLINE float2 __bfloat1622float2(const __nv_bfloat162 a) {
+FLASHINFER_INLINE float2 __bfloat1622float2(const __gpu_bfloat162 a) {
   float hi_float;
   float lo_float;
-  lo_float = __internal_bfloat162float(((__nv_bfloat162_raw)a).x);
-  hi_float = __internal_bfloat162float(((__nv_bfloat162_raw)a).y);
+  lo_float = __internal_bfloat162float(((__gpu_bfloat162_raw)a).x);
+  hi_float = __internal_bfloat162float(((__gpu_bfloat162_raw)a).y);
   return make_float2(lo_float, hi_float);
 }
 #endif
@@ -94,7 +130,8 @@ struct vec_cast<float, half> {
   template <size_t vec_size>
   FLASHINFER_INLINE static void cast(float* dst, const half* src) {
     if constexpr (vec_size == 1) {
-      dst[0] = (float)src[0];
+      // dst[0] = (float)src[0];
+      dst[0] = __half2float(src[0]);
     } else {
 #pragma unroll
       for (size_t i = 0; i < vec_size / 2; ++i) {
@@ -121,26 +158,26 @@ struct vec_cast<half, float> {
 
 template <typename T>
 constexpr FLASHINFER_INLINE int get_exponent_bits() {
-  if constexpr (std::is_same_v<T, __nv_fp8_e4m3>) {
+  if constexpr (std::is_same_v<T, __gpu_fp8_e4m3>) {
     return 4;
-  } else if constexpr (std::is_same_v<T, __nv_fp8_e5m2>) {
+  } else if constexpr (std::is_same_v<T, __gpu_fp8_e5m2>) {
     return 5;
   } else if constexpr (std::is_same_v<T, half>) {
     return 5;
-  } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+  } else if constexpr (std::is_same_v<T, gpu_bfloat16>) {
     return 8;
   }
 }
 
 template <typename T>
 constexpr FLASHINFER_INLINE int get_mantissa_bits() {
-  if constexpr (std::is_same_v<T, __nv_fp8_e4m3>) {
+  if constexpr (std::is_same_v<T, __gpu_fp8_e4m3>) {
     return 3;
-  } else if constexpr (std::is_same_v<T, __nv_fp8_e5m2>) {
+  } else if constexpr (std::is_same_v<T, __gpu_fp8_e5m2>) {
     return 2;
   } else if constexpr (std::is_same_v<T, half>) {
     return 11;
-  } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+  } else if constexpr (std::is_same_v<T, gpu_bfloat16>) {
     return 7;
   }
 }
@@ -156,7 +193,7 @@ constexpr FLASHINFER_INLINE int get_mantissa_bits() {
 template <typename fp8_dtype, typename fp16_dtype>
 __device__ void fast_dequant_f8f16x4(uint32_t* input, uint2* output) {
   uint32_t q = *input;
-  if constexpr (std::is_same_v<fp8_dtype, __nv_fp8_e5m2> && std::is_same_v<fp16_dtype, half>) {
+  if constexpr (std::is_same_v<fp8_dtype, __gpu_fp8_e5m2> && std::is_same_v<fp16_dtype, half>) {
     output->x = __byte_perm(0U, q, 0x5140);
     output->y = __byte_perm(0U, q, 0x7362);
   } else {
@@ -166,9 +203,11 @@ __device__ void fast_dequant_f8f16x4(uint32_t* input, uint2* output) {
 
     constexpr int RIGHT_SHIFT = FP16_EXPONENT - FP8_EXPONENT;
     // Calculate MASK for extracting mantissa and exponent
-    constexpr int MASK1 = 0x80000000;
-    constexpr int MASK2 = MASK1 >> (FP8_EXPONENT + FP8_MANTISSA);
-    constexpr int MASK3 = MASK2 & 0x7fffffff;
+    // XXX: duplicate defs of `MASK1` and `MASK2`,
+    // in the HIP file "include/hip/amd_detail/amd_device_functions.h".
+    constexpr int MASK1_orig = 0x80000000;
+    constexpr int MASK2_orig = MASK1_orig >> (FP8_EXPONENT + FP8_MANTISSA);
+    constexpr int MASK3 = MASK2_orig & 0x7fffffff;
     constexpr int MASK = MASK3 | (MASK3 >> 16);
     q = __byte_perm(q, q, 0x1302);
 
@@ -186,30 +225,30 @@ __device__ void fast_dequant_f8f16x4(uint32_t* input, uint2* output) {
       *(half2*)&(output->y) = __hmul2(*reinterpret_cast<const half2*>(&Out2), bias_reg);
     } else {
       constexpr uint32_t BIAS = (BIAS_OFFSET + 127) << 23;
-      const nv_bfloat162 bias_reg = __float2bfloat162_rn(*reinterpret_cast<const float*>(&BIAS));
+      const gpu_bfloat162 bias_reg = __float2bfloat162_rn(*reinterpret_cast<const float*>(&BIAS));
       // Convert to bfloat162 and apply bias
-      *(nv_bfloat162*)&(output->x) =
-          __hmul2(*reinterpret_cast<const nv_bfloat162*>(&Out1), bias_reg);
-      *(nv_bfloat162*)&(output->y) =
-          __hmul2(*reinterpret_cast<const nv_bfloat162*>(&Out2), bias_reg);
+      *(gpu_bfloat162*)&(output->x) =
+          __hmul2(*reinterpret_cast<const gpu_bfloat162*>(&Out1), bias_reg);
+      *(gpu_bfloat162*)&(output->y) =
+          __hmul2(*reinterpret_cast<const gpu_bfloat162*>(&Out2), bias_reg);
     }
   }
 }
 
 template <>
-struct vec_cast<nv_bfloat16, __nv_fp8_e4m3> {
+struct vec_cast<gpu_bfloat16, __gpu_fp8_e4m3> {
   template <size_t vec_size>
-  FLASHINFER_INLINE static void cast(nv_bfloat16* dst, const __nv_fp8_e4m3* src) {
+  FLASHINFER_INLINE static void cast(gpu_bfloat16* dst, const __gpu_fp8_e4m3* src) {
     if constexpr (vec_size == 1) {
-      dst[0] = nv_bfloat16(src[0]);
+      dst[0] = gpu_bfloat16(src[0]);
     } else if constexpr (vec_size == 2) {
-      dst[0] = nv_bfloat16(src[0]);
-      dst[1] = nv_bfloat16(src[1]);
+      dst[0] = gpu_bfloat16(src[0]);
+      dst[1] = gpu_bfloat16(src[1]);
     } else {
       static_assert(vec_size % 4 == 0, "vec_size must be a multiple of 4");
 #pragma unroll
       for (uint32_t i = 0; i < vec_size / 4; ++i) {
-        fast_dequant_f8f16x4<__nv_fp8_e4m3, nv_bfloat16>((uint32_t*)&src[i * 4],
+        fast_dequant_f8f16x4<__gpu_fp8_e4m3, gpu_bfloat16>((uint32_t*)&src[i * 4],
                                                          (uint2*)&dst[i * 4]);
       }
     }
@@ -217,79 +256,237 @@ struct vec_cast<nv_bfloat16, __nv_fp8_e4m3> {
 };
 
 template <>
-struct vec_cast<nv_bfloat16, __nv_fp8_e5m2> {
+struct vec_cast<gpu_bfloat16, __gpu_fp8_e5m2> {
   template <size_t vec_size>
-  FLASHINFER_INLINE static void cast(nv_bfloat16* dst, const __nv_fp8_e5m2* src) {
+  FLASHINFER_INLINE static void cast(gpu_bfloat16* dst, const __gpu_fp8_e5m2* src) {
     if constexpr (vec_size == 1) {
-      dst[0] = nv_bfloat16(src[0]);
+      dst[0] = gpu_bfloat16(src[0]);
     } else if constexpr (vec_size == 2) {
-      dst[0] = nv_bfloat16(src[0]);
-      dst[1] = nv_bfloat16(src[1]);
+      dst[0] = gpu_bfloat16(src[0]);
+      dst[1] = gpu_bfloat16(src[1]);
     } else {
       static_assert(vec_size % 4 == 0, "vec_size must be a multiple of 4");
 #pragma unroll
       for (uint32_t i = 0; i < vec_size / 4; ++i) {
-        fast_dequant_f8f16x4<__nv_fp8_e5m2, nv_bfloat16>((uint32_t*)&src[i * 4],
+        fast_dequant_f8f16x4<__gpu_fp8_e5m2, gpu_bfloat16>((uint32_t*)&src[i * 4],
                                                          (uint2*)&dst[i * 4]);
       }
     }
   }
 };
 
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+// Function to convert half-precision to e4m3
+__device__ uint8_t convert_f32_to_e4m3(float val) {
+  // Define the range of e4m3
+  // 1. Minimum representable value for e4m3
+  // 2. Binary 1000.000 in e4m3
+  // 3. FLT_MIN is not suitable for e4m3 because e4m3 has a much smaller dynamic range.
+  float min_e4m3 = -8.0f;
+  // 1. Maximum representable value for e4m3
+  // 2. Binary 0111.111 in e4m3
+  // FLT_MAX far exceeds the maximum value representable in e4m3.
+  float max_e4m3 = 7.875f;
+
+  // Saturate the value to the e4m3 range
+  val = fminf(fmaxf(val, min_e4m3), max_e4m3);
+
+  // Perform conversion
+  // Decompose into mantissa and exponent
+  int exp;
+  float mantissa = frexpf(val, &exp);
+
+  // Encode sign bit
+  uint8_t sign = (mantissa < 0) ? 0x80 : 0x00;
+
+  // Normalize mantissa and encode exponent
+  mantissa = fabsf(mantissa) * 16.0f;  // Scale mantissa for e4m3's 3-bit precision
+  uint8_t exponent = static_cast<uint8_t>(exp + 7);  // Bias of 7 for e4m3
+
+  // Quantize mantissa
+  // Apply round-to-nearest-even to the mantissa
+  uint8_t quant_mantissa = static_cast<uint8_t>(roundf(mantissa)) & 0x07;
+
+  // Combine into 8 bits: [sign][exponent][mantissa]
+  return sign | (exponent << 3) | quant_mantissa;
+}
+
+__device__ __half2 convert_uint32_to_half2(uint32_t input) {
+  // Extract the low and high 16 bits
+  uint16_t low_val = input & 0xFFFF;
+  uint16_t high_val = (input >> 16) & 0xFFFF;
+  // Convert to __half
+  __half low_half = __float2half(static_cast<float>(low_val));
+  __half high_half = __float2half(static_cast<float>(high_val));
+  // Pack into __half2
+  return __halves2half2(low_half, high_half);
+}
+
+
+// Convert f16x2 (__half2) to e4m3x2 (packed 16-bit)
+__device__ uint16_t convert_f16x2_to_e4m3x2(__half2 x) {
+  float f32_0 = __half2float(__low2half(x));
+  float f32_1 = __half2float(__high2half(x));
+  uint8_t e4m3_0 = convert_f32_to_e4m3(f32_0);
+  uint8_t e4m3_1 = convert_f32_to_e4m3(f32_1);
+  return (static_cast<uint16_t>(e4m3_1) << 8) | e4m3_0;
+}
+#endif
+
 template <>
-struct vec_cast<__nv_fp8_e4m3, half> {
+struct vec_cast<__gpu_fp8_e4m3, half> {
   template <size_t vec_size>
-  FLASHINFER_INLINE static void cast(__nv_fp8_e4m3* dst, const half* src) {
+  FLASHINFER_INLINE static void cast(__gpu_fp8_e4m3* dst, const half* src) {
 #ifdef FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
     if constexpr (vec_size == 1) {
-      dst[0] = __nv_fp8_e4m3(src[0]);
+      dst[0] = __gpu_fp8_e4m3(src[0]);
     } else {
 #pragma unroll
       for (size_t i = 0; i < vec_size / 2; ++i) {
         uint16_t y;
         uint32_t x = *(uint32_t*)&src[i * 2];
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+        __half2 x_h2 = convert_uint32_to_half2(x);
+        y = convert_f16x2_to_e4m3x2(x_h2);
+#else
         asm volatile("cvt.rn.satfinite.e4m3x2.f16x2 %0, %1;" : "=h"(y) : "r"(x));
+#endif
         *(uint16_t*)&dst[i * 2] = y;
       }
     }
 #else
 #pragma unroll
     for (size_t i = 0; i < vec_size; ++i) {
-      dst[i] = __nv_fp8_e4m3(src[i]);
+      dst[i] = __gpu_fp8_e4m3(src[i]);
     }
 #endif  // FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
   }
 };
 
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+__device__ uint16_t convert_f16x2_to_e5m2x2(uint32_t x) {
+  // Unpack the two 16-bit half-precision floats from the input
+  // Extract lower 16 bits
+  __half h1 = __ushort_as_half(x & 0xFFFF);
+  // Extract upper 16 bits
+  __half h2 = __ushort_as_half((x >> 16) & 0xFFFF);
+
+#if 0
+  // Alternative with `__uint2half_rn`
+  uint16_t val1 = x & 0xFFFF;  // Lower 16 bits
+  uint16_t val2 = (x >> 16) & 0xFFFF; // Upper 16 bits
+  __half h1 = __uint2half_rn(val1);
+  __half h2 = __uint2half_rn(val2);
+#endif
+
+  // Define the range of e5m2
+  // Minimum representable value for e5m2
+  const float min_e5m2 = -8.0f;
+  // Maximum representable value for e5m2
+  const float max_e5m2 = 7.75f;
+
+  // Helper lambda for conversion
+  auto f32_to_e5m2 = [min_e5m2, max_e5m2](float val) -> uint8_t {
+    // Saturate the val
+    val= fminf(fmaxf(val, min_e5m2), max_e5m2);
+
+    // Decompose into mantissa and exponent
+    int exp;
+    float mantissa = frexpf(val, &exp);
+
+    // Encode sign bit
+    uint8_t sign = (mantissa < 0) ? 0x10 : 0x00;  // Sign in bit 4
+    mantissa = fabsf(mantissa);
+
+    // Normalize mantissa and encode exponent
+    mantissa *= 4.0f;  // Scale for 2-bit mantissa
+    uint8_t exponent = static_cast<uint8_t>(exp + 7);  // Apply bias for e5m2
+
+    // Apply round-to-nearest-even
+    uint8_t quant_mantissa = static_cast<uint8_t>(roundf(mantissa)) & 0x03;
+
+    // Combine into 5 bits: [sign][exponent][mantissa]
+    return sign | (exponent << 2) | quant_mantissa;
+  };
+
+  // Convert the two __half values to e5m2
+  uint8_t e5m2_1 = f32_to_e5m2(__half2float(h1));
+  uint8_t e5m2_2 = f32_to_e5m2(__half2float(h2));
+
+  // Pack the two e5m2 values into a single 16-bit output
+  return (e5m2_2 << 8) | e5m2_1;
+}
+#endif
+
 template <>
-struct vec_cast<__nv_fp8_e5m2, half> {
+struct vec_cast<__gpu_fp8_e5m2, half> {
   template <size_t vec_size>
-  FLASHINFER_INLINE static void cast(__nv_fp8_e5m2* dst, const half* src) {
+  FLASHINFER_INLINE static void cast(__gpu_fp8_e5m2* dst, const half* src) {
 #ifdef FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
     if constexpr (vec_size == 1) {
-      dst[0] = __nv_fp8_e5m2(src[0]);
+      dst[0] = __gpu_fp8_e5m2(src[0]);
     } else {
 #pragma unroll
       for (size_t i = 0; i < vec_size / 2; ++i) {
         uint16_t y;
         uint32_t x = *(uint32_t*)&src[i * 2];
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+        y = convert_f16x2_to_e5m2x2(x);
+#else
         asm volatile("cvt.rn.satfinite.e5m2x2.f16x2 %0, %1;" : "=h"(y) : "r"(x));
+#endif
         *(uint16_t*)&dst[i * 2] = y;
       }
     }
 #else
 #pragma unroll
     for (size_t i = 0; i < vec_size; ++i) {
-      dst[i] = __nv_fp8_e5m2(src[i]);
+      dst[i] = __gpu_fp8_e5m2(src[i]);
     }
 #endif  // FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
   }
 };
 
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+__device__ uint32_t convert_e4m3x2_to_f16x2(uint16_t x) {
+  // Extract two e4m3 values from the 16-bit input
+  uint8_t e4m3_1 = x & 0xFF;  // Lower 8 bits
+  uint8_t e4m3_2 = (x >> 8) & 0xFF;  // Upper 8 bits
+
+  // Decode e4m3 to float
+  auto e4m3_to_f32 = [](uint8_t e4m3) -> float {
+    // Extract sign, exponent, and mantissa
+    int sign = (e4m3 & 0x80) ? -1 : 1;
+    int exponent = ((e4m3 >> 3) & 0x0F) - 7;  // 4-bit exponent with bias 7
+    int mantissa = e4m3 & 0x07;  // 3-bit mantissa
+
+    // Handle special case: zero
+    if (exponent == -7 && mantissa == 0) {
+      return 0.0f;
+    }
+
+    // Convert to float
+    float f32_val = sign * ldexpf(1.0f + mantissa / 8.0f, exponent);
+    return f32_val;
+  };
+
+  float f1 = e4m3_to_f32(e4m3_1);
+  float f2 = e4m3_to_f32(e4m3_2);
+
+  // Convert float to IEEE f16
+  __half h1 = __float2half_rn(f1);
+  __half h2 = __float2half_rn(f2);
+
+  // Pack the two f16 values into a single uint32_t
+  uint32_t f16x2 = (__half_as_ushort(h2) << 16) | __half_as_ushort(h1);
+  return f16x2;
+}
+#endif
+
 template <>
-struct vec_cast<half, __nv_fp8_e4m3> {
+struct vec_cast<half, __gpu_fp8_e4m3> {
   template <size_t vec_size>
-  FLASHINFER_INLINE static void cast(half* dst, const __nv_fp8_e4m3* src) {
+  FLASHINFER_INLINE static void cast(half* dst, const __gpu_fp8_e4m3* src) {
 #ifdef FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
     if constexpr (vec_size == 1) {
       dst[0] = half(src[0]);
@@ -298,7 +495,11 @@ struct vec_cast<half, __nv_fp8_e4m3> {
       for (size_t i = 0; i < vec_size / 2; ++i) {
         uint32_t y;
         uint16_t x = *(uint16_t*)&src[i * 2];
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+        y = convert_e4m3x2_to_f16x2(x);
+#else
         asm volatile("cvt.rn.f16x2.e4m3x2 %0, %1;" : "=r"(y) : "h"(x));
+#endif
         *(uint32_t*)&dst[i * 2] = y;
       }
     }
@@ -312,17 +513,53 @@ struct vec_cast<half, __nv_fp8_e4m3> {
       static_assert(vec_size % 4 == 0, "vec_size must be a multiple of 4");
 #pragma unroll
       for (uint32_t i = 0; i < vec_size / 4; ++i) {
-        fast_dequant_f8f16x4<__nv_fp8_e4m3, half>((uint32_t*)&src[i * 4], (uint2*)&dst[i * 4]);
+        fast_dequant_f8f16x4<__gpu_fp8_e4m3, half>((uint32_t*)&src[i * 4], (uint2*)&dst[i * 4]);
       }
     }
 #endif  // FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
   }
 };
 
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+__device__ uint32_t convert_e5m2x2_to_f16x2(uint16_t x) {
+  // Extract two e5m2 values from the 16-bit input
+  uint8_t e5m2_1 = x & 0xFF;  // Lower 8 bits
+  uint8_t e5m2_2 = (x >> 8) & 0xFF;  // Upper 8 bits
+
+  // Decode e5m2 to float
+  auto e5m2_to_f32 = [](uint8_t e5m2) -> float {
+    // Extract sign, exponent, and mantissa
+    int sign = (e5m2 & 0x80) ? -1 : 1;  // Sign bit
+    int exponent = ((e5m2 >> 2) & 0x1F) - 15;  // 5-bit exponent with bias 15
+    int mantissa = e5m2 & 0x03;  // 2-bit mantissa
+
+    // Handle special case: zero
+    if (exponent == -15 && mantissa == 0) {
+      return 0.0f;
+    }
+
+    // Convert to float
+    float value = sign * ldexpf(1.0f + mantissa / 4.0f, exponent);
+    return value;
+  };
+
+  float f1 = e5m2_to_f32(e5m2_1);
+  float f2 = e5m2_to_f32(e5m2_2);
+
+  // Convert float to IEEE f16
+  __half h1 = __float2half_rn(f1);
+  __half h2 = __float2half_rn(f2);
+
+  // Pack the two f16 values into a single uint32_t
+  uint32_t f16x2 = (__half_as_ushort(h2) << 16) | __half_as_ushort(h1);
+  return f16x2;
+}
+#endif
+
 template <>
-struct vec_cast<half, __nv_fp8_e5m2> {
+struct vec_cast<half, __gpu_fp8_e5m2> {
   template <size_t vec_size>
-  FLASHINFER_INLINE static void cast(half* dst, const __nv_fp8_e5m2* src) {
+  FLASHINFER_INLINE static void cast(half* dst, const __gpu_fp8_e5m2* src) {
 #ifdef FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
     if constexpr (vec_size == 1) {
       dst[0] = half(src[0]);
@@ -331,7 +568,11 @@ struct vec_cast<half, __nv_fp8_e5m2> {
       for (size_t i = 0; i < vec_size / 2; ++i) {
         uint32_t y;
         uint16_t x = *(uint16_t*)&src[i * 2];
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+        y = convert_e5m2x2_to_f16x2(x);
+#else
         asm volatile("cvt.rn.f16x2.e5m2x2 %0, %1;" : "=r"(y) : "h"(x));
+#endif
         *(uint32_t*)&dst[i * 2] = y;
       }
     }
@@ -345,7 +586,7 @@ struct vec_cast<half, __nv_fp8_e5m2> {
       static_assert(vec_size % 4 == 0, "vec_size must be a multiple of 4");
 #pragma unroll
       for (uint32_t i = 0; i < vec_size / 4; ++i) {
-        fast_dequant_f8f16x4<__nv_fp8_e5m2, half>((uint32_t*)&src[i * 4], (uint2*)&dst[i * 4]);
+        fast_dequant_f8f16x4<__gpu_fp8_e5m2, half>((uint32_t*)&src[i * 4], (uint2*)&dst[i * 4]);
       }
     }
 #endif  // FLASHINFER_HARDWARE_FP8_CONVERSION_ENABLED
@@ -353,30 +594,30 @@ struct vec_cast<half, __nv_fp8_e5m2> {
 };
 
 template <>
-struct vec_cast<float, nv_bfloat16> {
+struct vec_cast<float, gpu_bfloat16> {
   template <size_t vec_size>
-  FLASHINFER_INLINE static void cast(float* dst, const nv_bfloat16* src) {
+  FLASHINFER_INLINE static void cast(float* dst, const gpu_bfloat16* src) {
     if constexpr (vec_size == 1) {
       dst[0] = (float)src[0];
     } else {
 #pragma unroll
       for (size_t i = 0; i < vec_size / 2; ++i) {
-        ((float2*)dst)[i] = __bfloat1622float2(((nv_bfloat162*)src)[i]);
+        ((float2*)dst)[i] = __bfloat1622float2(((gpu_bfloat162*)src)[i]);
       }
     }
   }
 };
 
 template <>
-struct vec_cast<nv_bfloat16, float> {
+struct vec_cast<gpu_bfloat16, float> {
   template <size_t vec_size>
-  FLASHINFER_INLINE static void cast(nv_bfloat16* dst, const float* src) {
+  FLASHINFER_INLINE static void cast(gpu_bfloat16* dst, const float* src) {
     if constexpr (vec_size == 1) {
-      dst[0] = nv_bfloat16(src[0]);
+      dst[0] = gpu_bfloat16(src[0]);
     } else {
 #pragma unroll
       for (size_t i = 0; i < vec_size / 2; ++i) {
-        ((nv_bfloat162*)dst)[i] = __float22bfloat162_rn(((float2*)src)[i]);
+        ((gpu_bfloat162*)dst)[i] = __float22bfloat162_rn(((float2*)src)[i]);
       }
     }
   }
@@ -402,7 +643,11 @@ struct vec_t {
 template <typename src_float_t, typename tgt_float_t, size_t vec_size>
 FLASHINFER_INLINE void cast_from_impl(vec_t<tgt_float_t, vec_size>& dst,
                                       const vec_t<src_float_t, vec_size>& src) {
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+  vec_cast<tgt_float_t, src_float_t>::template cast<vec_size>(
+#else
   vec_cast<tgt_float_t, src_float_t>::cast<vec_size>(
+#endif
       dst.ptr(), const_cast<vec_t<src_float_t, vec_size>*>(&src)->ptr());
 }
 
@@ -430,21 +675,21 @@ FLASHINFER_INLINE void cast_store_impl(tgt_float_t* dst_ptr,
   }
 }
 
-/******************* vec_t<__nv_fp8_e4m3> *******************/
+/******************* vec_t<__gpu_fp8_e4m3> *******************/
 
-// __nv_fp8_e4m3 x 1
+// __gpu_fp8_e4m3 x 1
 template <>
-struct vec_t<__nv_fp8_e4m3, 1> {
-  __nv_fp8_e4m3 data;
+struct vec_t<__gpu_fp8_e4m3, 1> {
+  __gpu_fp8_e4m3 data;
 
-  FLASHINFER_INLINE __nv_fp8_e4m3& operator[](size_t i) { return ((__nv_fp8_e4m3*)(&data))[i]; }
-  FLASHINFER_INLINE const __nv_fp8_e4m3& operator[](size_t i) const {
-    return ((const __nv_fp8_e4m3*)(&data))[i];
+  FLASHINFER_INLINE __gpu_fp8_e4m3& operator[](size_t i) { return ((__gpu_fp8_e4m3*)(&data))[i]; }
+  FLASHINFER_INLINE const __gpu_fp8_e4m3& operator[](size_t i) const {
+    return ((const __gpu_fp8_e4m3*)(&data))[i];
   }
-  FLASHINFER_INLINE __nv_fp8_e4m3* ptr() { return reinterpret_cast<__nv_fp8_e4m3*>(&data); }
-  FLASHINFER_INLINE void fill(__nv_fp8_e4m3 val);
-  FLASHINFER_INLINE void load(const __nv_fp8_e4m3* ptr);
-  FLASHINFER_INLINE void store(__nv_fp8_e4m3* ptr) const;
+  FLASHINFER_INLINE __gpu_fp8_e4m3* ptr() { return reinterpret_cast<__gpu_fp8_e4m3*>(&data); }
+  FLASHINFER_INLINE void fill(__gpu_fp8_e4m3 val);
+  FLASHINFER_INLINE void load(const __gpu_fp8_e4m3* ptr);
+  FLASHINFER_INLINE void store(__gpu_fp8_e4m3* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 1>& src) {
     cast_from_impl(*this, src);
@@ -458,33 +703,33 @@ struct vec_t<__nv_fp8_e4m3, 1> {
     cast_store_impl(ptr, *this);
   }
 
-  FLASHINFER_INLINE static void memcpy(__nv_fp8_e4m3* dst, const __nv_fp8_e4m3* src);
+  FLASHINFER_INLINE static void memcpy(__gpu_fp8_e4m3* dst, const __gpu_fp8_e4m3* src);
 };
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 1>::fill(__nv_fp8_e4m3 val) { data = val; }
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 1>::fill(__gpu_fp8_e4m3 val) { data = val; }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 1>::load(const __nv_fp8_e4m3* ptr) { data = *ptr; }
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 1>::load(const __gpu_fp8_e4m3* ptr) { data = *ptr; }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 1>::store(__nv_fp8_e4m3* ptr) const { *ptr = data; }
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 1>::store(__gpu_fp8_e4m3* ptr) const { *ptr = data; }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 1>::memcpy(__nv_fp8_e4m3* dst,
-                                                       const __nv_fp8_e4m3* src) {
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 1>::memcpy(__gpu_fp8_e4m3* dst,
+                                                       const __gpu_fp8_e4m3* src) {
   *dst = *src;
 }
 
-// __nv_fp8_e4m3 x 2
+// __gpu_fp8_e4m3 x 2
 template <>
-struct vec_t<__nv_fp8_e4m3, 2> {
-  __nv_fp8x2_e4m3 data;
+struct vec_t<__gpu_fp8_e4m3, 2> {
+  __gpu_fp8x2_e4m3 data;
 
-  FLASHINFER_INLINE __nv_fp8_e4m3& operator[](size_t i) { return ((__nv_fp8_e4m3*)(&data))[i]; }
-  FLASHINFER_INLINE const __nv_fp8_e4m3& operator[](size_t i) const {
-    return ((const __nv_fp8_e4m3*)(&data))[i];
+  FLASHINFER_INLINE __gpu_fp8_e4m3& operator[](size_t i) { return ((__gpu_fp8_e4m3*)(&data))[i]; }
+  FLASHINFER_INLINE const __gpu_fp8_e4m3& operator[](size_t i) const {
+    return ((const __gpu_fp8_e4m3*)(&data))[i];
   }
-  FLASHINFER_INLINE __nv_fp8_e4m3* ptr() { return reinterpret_cast<__nv_fp8_e4m3*>(&data); }
-  FLASHINFER_INLINE void fill(__nv_fp8_e4m3 val);
-  FLASHINFER_INLINE void load(const __nv_fp8_e4m3* ptr);
-  FLASHINFER_INLINE void store(__nv_fp8_e4m3* ptr) const;
+  FLASHINFER_INLINE __gpu_fp8_e4m3* ptr() { return reinterpret_cast<__gpu_fp8_e4m3*>(&data); }
+  FLASHINFER_INLINE void fill(__gpu_fp8_e4m3 val);
+  FLASHINFER_INLINE void load(const __gpu_fp8_e4m3* ptr);
+  FLASHINFER_INLINE void store(__gpu_fp8_e4m3* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 2>& src) {
     cast_from_impl(*this, src);
@@ -497,40 +742,40 @@ struct vec_t<__nv_fp8_e4m3, 2> {
   FLASHINFER_INLINE void cast_store(T* ptr) const {
     cast_store_impl(ptr, *this);
   }
-  FLASHINFER_INLINE static void memcpy(__nv_fp8_e4m3* dst, const __nv_fp8_e4m3* src);
+  FLASHINFER_INLINE static void memcpy(__gpu_fp8_e4m3* dst, const __gpu_fp8_e4m3* src);
 };
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 2>::fill(__nv_fp8_e4m3 val) {
-  data.__x = (__nv_fp8x2_storage_t(val.__x) << 8) | __nv_fp8x2_storage_t(val.__x);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 2>::fill(__gpu_fp8_e4m3 val) {
+  data.__x = (__gpu_fp8x2_storage_t(val.__x) << 8) | __gpu_fp8x2_storage_t(val.__x);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 2>::load(const __nv_fp8_e4m3* ptr) {
-  data = *((__nv_fp8x2_e4m3*)ptr);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 2>::load(const __gpu_fp8_e4m3* ptr) {
+  data = *((__gpu_fp8x2_e4m3*)ptr);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 2>::store(__nv_fp8_e4m3* ptr) const {
-  *((__nv_fp8x2_e4m3*)ptr) = data;
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 2>::store(__gpu_fp8_e4m3* ptr) const {
+  *((__gpu_fp8x2_e4m3*)ptr) = data;
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 2>::memcpy(__nv_fp8_e4m3* dst,
-                                                       const __nv_fp8_e4m3* src) {
-  *((__nv_fp8x2_e4m3*)dst) = *((__nv_fp8x2_e4m3*)src);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 2>::memcpy(__gpu_fp8_e4m3* dst,
+                                                       const __gpu_fp8_e4m3* src) {
+  *((__gpu_fp8x2_e4m3*)dst) = *((__gpu_fp8x2_e4m3*)src);
 }
 
-// __nv_fp8_e4m3 x 4
+// __gpu_fp8_e4m3 x 4
 
 template <>
-struct vec_t<__nv_fp8_e4m3, 4> {
-  __nv_fp8x4_e4m3 data;
+struct vec_t<__gpu_fp8_e4m3, 4> {
+  __gpu_fp8x4_e4m3 data;
 
-  FLASHINFER_INLINE __nv_fp8_e4m3& operator[](size_t i) { return ((__nv_fp8_e4m3*)(&data))[i]; }
-  FLASHINFER_INLINE const __nv_fp8_e4m3& operator[](size_t i) const {
-    return ((const __nv_fp8_e4m3*)(&data))[i];
+  FLASHINFER_INLINE __gpu_fp8_e4m3& operator[](size_t i) { return ((__gpu_fp8_e4m3*)(&data))[i]; }
+  FLASHINFER_INLINE const __gpu_fp8_e4m3& operator[](size_t i) const {
+    return ((const __gpu_fp8_e4m3*)(&data))[i];
   }
-  FLASHINFER_INLINE __nv_fp8_e4m3* ptr() { return reinterpret_cast<__nv_fp8_e4m3*>(&data); }
-  FLASHINFER_INLINE void fill(__nv_fp8_e4m3 val);
-  FLASHINFER_INLINE void load(const __nv_fp8_e4m3* ptr);
-  FLASHINFER_INLINE void store(__nv_fp8_e4m3* ptr) const;
+  FLASHINFER_INLINE __gpu_fp8_e4m3* ptr() { return reinterpret_cast<__gpu_fp8_e4m3*>(&data); }
+  FLASHINFER_INLINE void fill(__gpu_fp8_e4m3 val);
+  FLASHINFER_INLINE void load(const __gpu_fp8_e4m3* ptr);
+  FLASHINFER_INLINE void store(__gpu_fp8_e4m3* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 4>& src) {
     cast_from_impl(*this, src);
@@ -544,41 +789,41 @@ struct vec_t<__nv_fp8_e4m3, 4> {
     cast_store_impl(ptr, *this);
   }
 
-  FLASHINFER_INLINE static void memcpy(__nv_fp8_e4m3* dst, const __nv_fp8_e4m3* src);
+  FLASHINFER_INLINE static void memcpy(__gpu_fp8_e4m3* dst, const __gpu_fp8_e4m3* src);
 };
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 4>::fill(__nv_fp8_e4m3 val) {
-  data.__x = (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-             (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 4>::fill(__gpu_fp8_e4m3 val) {
+  data.__x = (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+             (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 4>::load(const __nv_fp8_e4m3* ptr) {
-  data = *((__nv_fp8x4_e4m3*)ptr);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 4>::load(const __gpu_fp8_e4m3* ptr) {
+  data = *((__gpu_fp8x4_e4m3*)ptr);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 4>::store(__nv_fp8_e4m3* ptr) const {
-  *((__nv_fp8x4_e4m3*)ptr) = data;
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 4>::store(__gpu_fp8_e4m3* ptr) const {
+  *((__gpu_fp8x4_e4m3*)ptr) = data;
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 4>::memcpy(__nv_fp8_e4m3* dst,
-                                                       const __nv_fp8_e4m3* src) {
-  *((__nv_fp8x4_e4m3*)dst) = *((__nv_fp8x4_e4m3*)src);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 4>::memcpy(__gpu_fp8_e4m3* dst,
+                                                       const __gpu_fp8_e4m3* src) {
+  *((__gpu_fp8x4_e4m3*)dst) = *((__gpu_fp8x4_e4m3*)src);
 }
 
-// __nv_fp8_e4m3 x 8
+// __gpu_fp8_e4m3 x 8
 
 template <>
-struct vec_t<__nv_fp8_e4m3, 8> {
+struct vec_t<__gpu_fp8_e4m3, 8> {
   uint2 data;
 
-  FLASHINFER_INLINE __nv_fp8_e4m3& operator[](size_t i) { return ((__nv_fp8_e4m3*)(&data))[i]; }
-  FLASHINFER_INLINE const __nv_fp8_e4m3& operator[](size_t i) const {
-    return ((const __nv_fp8_e4m3*)(&data))[i];
+  FLASHINFER_INLINE __gpu_fp8_e4m3& operator[](size_t i) { return ((__gpu_fp8_e4m3*)(&data))[i]; }
+  FLASHINFER_INLINE const __gpu_fp8_e4m3& operator[](size_t i) const {
+    return ((const __gpu_fp8_e4m3*)(&data))[i];
   }
-  FLASHINFER_INLINE __nv_fp8_e4m3* ptr() { return reinterpret_cast<__nv_fp8_e4m3*>(&data); }
-  FLASHINFER_INLINE void fill(__nv_fp8_e4m3 val);
-  FLASHINFER_INLINE void load(const __nv_fp8_e4m3* ptr);
-  FLASHINFER_INLINE void store(__nv_fp8_e4m3* ptr) const;
+  FLASHINFER_INLINE __gpu_fp8_e4m3* ptr() { return reinterpret_cast<__gpu_fp8_e4m3*>(&data); }
+  FLASHINFER_INLINE void fill(__gpu_fp8_e4m3 val);
+  FLASHINFER_INLINE void load(const __gpu_fp8_e4m3* ptr);
+  FLASHINFER_INLINE void store(__gpu_fp8_e4m3* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 8>& src) {
     cast_from_impl(*this, src);
@@ -592,65 +837,65 @@ struct vec_t<__nv_fp8_e4m3, 8> {
     cast_store_impl(ptr, *this);
   }
 
-  FLASHINFER_INLINE static void memcpy(__nv_fp8_e4m3* dst, const __nv_fp8_e4m3* src);
+  FLASHINFER_INLINE static void memcpy(__gpu_fp8_e4m3* dst, const __gpu_fp8_e4m3* src);
 };
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 8>::fill(__nv_fp8_e4m3 val) {
-  ((__nv_fp8x4_e4m3*)(&data.x))->__x =
-      (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-      (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
-  ((__nv_fp8x4_e4m3*)(&data.y))->__x =
-      (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-      (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 8>::fill(__gpu_fp8_e4m3 val) {
+  ((__gpu_fp8x4_e4m3*)(&data.x))->__x =
+      (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+      (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
+  ((__gpu_fp8x4_e4m3*)(&data.y))->__x =
+      (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+      (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 8>::load(const __nv_fp8_e4m3* ptr) {
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 8>::load(const __gpu_fp8_e4m3* ptr) {
   data = *((uint2*)ptr);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 8>::store(__nv_fp8_e4m3* ptr) const {
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 8>::store(__gpu_fp8_e4m3* ptr) const {
   *((uint2*)ptr) = data;
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e4m3, 8>::memcpy(__nv_fp8_e4m3* dst,
-                                                       const __nv_fp8_e4m3* src) {
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e4m3, 8>::memcpy(__gpu_fp8_e4m3* dst,
+                                                       const __gpu_fp8_e4m3* src) {
   *((uint2*)dst) = *((uint2*)src);
 }
 
-// __nv_fp8_e4m3 x 16 or more
+// __gpu_fp8_e4m3 x 16 or more
 template <size_t vec_size>
-struct vec_t<__nv_fp8_e4m3, vec_size> {
+struct vec_t<__gpu_fp8_e4m3, vec_size> {
   uint4 data[vec_size / 16];
 
-  FLASHINFER_INLINE __nv_fp8_e4m3& operator[](size_t i) { return ((__nv_fp8_e4m3*)data)[i]; }
-  FLASHINFER_INLINE const __nv_fp8_e4m3& operator[](size_t i) const {
-    return ((const __nv_fp8_e4m3*)data)[i];
+  FLASHINFER_INLINE __gpu_fp8_e4m3& operator[](size_t i) { return ((__gpu_fp8_e4m3*)data)[i]; }
+  FLASHINFER_INLINE const __gpu_fp8_e4m3& operator[](size_t i) const {
+    return ((const __gpu_fp8_e4m3*)data)[i];
   }
-  FLASHINFER_INLINE __nv_fp8_e4m3* ptr() { return reinterpret_cast<__nv_fp8_e4m3*>(&data); }
-  FLASHINFER_INLINE void fill(__nv_fp8_e4m3 val) {
+  FLASHINFER_INLINE __gpu_fp8_e4m3* ptr() { return reinterpret_cast<__gpu_fp8_e4m3*>(&data); }
+  FLASHINFER_INLINE void fill(__gpu_fp8_e4m3 val) {
 #pragma unroll
     for (size_t i = 0; i < vec_size / 16; ++i) {
-      ((__nv_fp8x4_e4m3*)(&(data[i].x)))->__x =
-          (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-          (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
-      ((__nv_fp8x4_e4m3*)(&(data[i].y)))->__x =
-          (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-          (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
-      ((__nv_fp8x4_e4m3*)(&(data[i].z)))->__x =
-          (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-          (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
-      ((__nv_fp8x4_e4m3*)(&(data[i].w)))->__x =
-          (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-          (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
+      ((__gpu_fp8x4_e4m3*)(&(data[i].x)))->__x =
+          (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+          (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
+      ((__gpu_fp8x4_e4m3*)(&(data[i].y)))->__x =
+          (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+          (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
+      ((__gpu_fp8x4_e4m3*)(&(data[i].z)))->__x =
+          (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+          (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
+      ((__gpu_fp8x4_e4m3*)(&(data[i].w)))->__x =
+          (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+          (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
     }
   }
-  FLASHINFER_INLINE void load(const __nv_fp8_e4m3* ptr) {
+  FLASHINFER_INLINE void load(const __gpu_fp8_e4m3* ptr) {
 #pragma unroll
     for (size_t i = 0; i < vec_size / 16; ++i) {
       data[i] = ((uint4*)ptr)[i];
     }
   }
-  FLASHINFER_INLINE void store(__nv_fp8_e4m3* ptr) const {
+  FLASHINFER_INLINE void store(__gpu_fp8_e4m3* ptr) const {
 #pragma unroll
     for (size_t i = 0; i < vec_size / 16; ++i) {
       ((uint4*)ptr)[i] = data[i];
@@ -669,7 +914,7 @@ struct vec_t<__nv_fp8_e4m3, vec_size> {
     cast_store_impl(ptr, *this);
   }
 
-  FLASHINFER_INLINE static void memcpy(__nv_fp8_e4m3* dst, const __nv_fp8_e4m3* src) {
+  FLASHINFER_INLINE static void memcpy(__gpu_fp8_e4m3* dst, const __gpu_fp8_e4m3* src) {
 #pragma unroll
     for (size_t i = 0; i < vec_size / 16; ++i) {
       ((uint4*)dst)[i] = ((uint4*)src)[i];
@@ -677,21 +922,21 @@ struct vec_t<__nv_fp8_e4m3, vec_size> {
   }
 };
 
-/******************* vec_t<__nv_fp8_e5m2> *******************/
+/******************* vec_t<__gpu_fp8_e5m2> *******************/
 
-// __nv_fp8_e5m2 x 1
+// __gpu_fp8_e5m2 x 1
 template <>
-struct vec_t<__nv_fp8_e5m2, 1> {
-  __nv_fp8_e5m2 data;
+struct vec_t<__gpu_fp8_e5m2, 1> {
+  __gpu_fp8_e5m2 data;
 
-  FLASHINFER_INLINE __nv_fp8_e5m2& operator[](size_t i) { return ((__nv_fp8_e5m2*)(&data))[i]; }
-  FLASHINFER_INLINE const __nv_fp8_e5m2& operator[](size_t i) const {
-    return ((const __nv_fp8_e5m2*)(&data))[i];
+  FLASHINFER_INLINE __gpu_fp8_e5m2& operator[](size_t i) { return ((__gpu_fp8_e5m2*)(&data))[i]; }
+  FLASHINFER_INLINE const __gpu_fp8_e5m2& operator[](size_t i) const {
+    return ((const __gpu_fp8_e5m2*)(&data))[i];
   }
-  FLASHINFER_INLINE __nv_fp8_e5m2* ptr() { return reinterpret_cast<__nv_fp8_e5m2*>(&data); }
-  FLASHINFER_INLINE void fill(__nv_fp8_e5m2 val);
-  FLASHINFER_INLINE void load(const __nv_fp8_e5m2* ptr);
-  FLASHINFER_INLINE void store(__nv_fp8_e5m2* ptr) const;
+  FLASHINFER_INLINE __gpu_fp8_e5m2* ptr() { return reinterpret_cast<__gpu_fp8_e5m2*>(&data); }
+  FLASHINFER_INLINE void fill(__gpu_fp8_e5m2 val);
+  FLASHINFER_INLINE void load(const __gpu_fp8_e5m2* ptr);
+  FLASHINFER_INLINE void store(__gpu_fp8_e5m2* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 1>& src) {
     cast_from_impl(*this, src);
@@ -705,33 +950,33 @@ struct vec_t<__nv_fp8_e5m2, 1> {
     cast_store_impl(ptr, *this);
   }
 
-  FLASHINFER_INLINE static void memcpy(__nv_fp8_e5m2* dst, const __nv_fp8_e5m2* src);
+  FLASHINFER_INLINE static void memcpy(__gpu_fp8_e5m2* dst, const __gpu_fp8_e5m2* src);
 };
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 1>::fill(__nv_fp8_e5m2 val) { data = val; }
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 1>::fill(__gpu_fp8_e5m2 val) { data = val; }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 1>::load(const __nv_fp8_e5m2* ptr) { data = *ptr; }
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 1>::load(const __gpu_fp8_e5m2* ptr) { data = *ptr; }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 1>::store(__nv_fp8_e5m2* ptr) const { *ptr = data; }
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 1>::store(__gpu_fp8_e5m2* ptr) const { *ptr = data; }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 1>::memcpy(__nv_fp8_e5m2* dst,
-                                                       const __nv_fp8_e5m2* src) {
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 1>::memcpy(__gpu_fp8_e5m2* dst,
+                                                       const __gpu_fp8_e5m2* src) {
   *dst = *src;
 }
 
-// __nv_fp8_e5m2 x 2
+// __gpu_fp8_e5m2 x 2
 template <>
-struct vec_t<__nv_fp8_e5m2, 2> {
-  __nv_fp8x2_e5m2 data;
+struct vec_t<__gpu_fp8_e5m2, 2> {
+  __gpu_fp8x2_e5m2 data;
 
-  FLASHINFER_INLINE __nv_fp8_e5m2& operator[](size_t i) { return ((__nv_fp8_e5m2*)(&data))[i]; }
-  FLASHINFER_INLINE const __nv_fp8_e5m2& operator[](size_t i) const {
-    return ((const __nv_fp8_e5m2*)(&data))[i];
+  FLASHINFER_INLINE __gpu_fp8_e5m2& operator[](size_t i) { return ((__gpu_fp8_e5m2*)(&data))[i]; }
+  FLASHINFER_INLINE const __gpu_fp8_e5m2& operator[](size_t i) const {
+    return ((const __gpu_fp8_e5m2*)(&data))[i];
   }
-  FLASHINFER_INLINE __nv_fp8_e5m2* ptr() { return reinterpret_cast<__nv_fp8_e5m2*>(&data); }
-  FLASHINFER_INLINE void fill(__nv_fp8_e5m2 val);
-  FLASHINFER_INLINE void load(const __nv_fp8_e5m2* ptr);
-  FLASHINFER_INLINE void store(__nv_fp8_e5m2* ptr) const;
+  FLASHINFER_INLINE __gpu_fp8_e5m2* ptr() { return reinterpret_cast<__gpu_fp8_e5m2*>(&data); }
+  FLASHINFER_INLINE void fill(__gpu_fp8_e5m2 val);
+  FLASHINFER_INLINE void load(const __gpu_fp8_e5m2* ptr);
+  FLASHINFER_INLINE void store(__gpu_fp8_e5m2* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 2>& src) {
     cast_from_impl(*this, src);
@@ -745,40 +990,40 @@ struct vec_t<__nv_fp8_e5m2, 2> {
     cast_store_impl(ptr, *this);
   }
 
-  FLASHINFER_INLINE static void memcpy(__nv_fp8_e5m2* dst, const __nv_fp8_e5m2* src);
+  FLASHINFER_INLINE static void memcpy(__gpu_fp8_e5m2* dst, const __gpu_fp8_e5m2* src);
 };
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 2>::fill(__nv_fp8_e5m2 val) {
-  data.__x = (__nv_fp8x2_storage_t(val.__x) << 8) | __nv_fp8x2_storage_t(val.__x);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 2>::fill(__gpu_fp8_e5m2 val) {
+  data.__x = (__gpu_fp8x2_storage_t(val.__x) << 8) | __gpu_fp8x2_storage_t(val.__x);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 2>::load(const __nv_fp8_e5m2* ptr) {
-  data = *((__nv_fp8x2_e5m2*)ptr);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 2>::load(const __gpu_fp8_e5m2* ptr) {
+  data = *((__gpu_fp8x2_e5m2*)ptr);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 2>::store(__nv_fp8_e5m2* ptr) const {
-  *((__nv_fp8x2_e5m2*)ptr) = data;
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 2>::store(__gpu_fp8_e5m2* ptr) const {
+  *((__gpu_fp8x2_e5m2*)ptr) = data;
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 2>::memcpy(__nv_fp8_e5m2* dst,
-                                                       const __nv_fp8_e5m2* src) {
-  *((__nv_fp8x2_e5m2*)dst) = *((__nv_fp8x2_e5m2*)src);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 2>::memcpy(__gpu_fp8_e5m2* dst,
+                                                       const __gpu_fp8_e5m2* src) {
+  *((__gpu_fp8x2_e5m2*)dst) = *((__gpu_fp8x2_e5m2*)src);
 }
 
-// __nv_fp8_e5m2 x 4
+// __gpu_fp8_e5m2 x 4
 
 template <>
-struct vec_t<__nv_fp8_e5m2, 4> {
-  __nv_fp8x4_e5m2 data;
+struct vec_t<__gpu_fp8_e5m2, 4> {
+  __gpu_fp8x4_e5m2 data;
 
-  FLASHINFER_INLINE __nv_fp8_e5m2& operator[](size_t i) { return ((__nv_fp8_e5m2*)(&data))[i]; }
-  FLASHINFER_INLINE const __nv_fp8_e5m2& operator[](size_t i) const {
-    return ((const __nv_fp8_e5m2*)(&data))[i];
+  FLASHINFER_INLINE __gpu_fp8_e5m2& operator[](size_t i) { return ((__gpu_fp8_e5m2*)(&data))[i]; }
+  FLASHINFER_INLINE const __gpu_fp8_e5m2& operator[](size_t i) const {
+    return ((const __gpu_fp8_e5m2*)(&data))[i];
   }
-  FLASHINFER_INLINE __nv_fp8_e5m2* ptr() { return reinterpret_cast<__nv_fp8_e5m2*>(&data); }
-  FLASHINFER_INLINE void fill(__nv_fp8_e5m2 val);
-  FLASHINFER_INLINE void load(const __nv_fp8_e5m2* ptr);
-  FLASHINFER_INLINE void store(__nv_fp8_e5m2* ptr) const;
+  FLASHINFER_INLINE __gpu_fp8_e5m2* ptr() { return reinterpret_cast<__gpu_fp8_e5m2*>(&data); }
+  FLASHINFER_INLINE void fill(__gpu_fp8_e5m2 val);
+  FLASHINFER_INLINE void load(const __gpu_fp8_e5m2* ptr);
+  FLASHINFER_INLINE void store(__gpu_fp8_e5m2* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 4>& src) {
     cast_from_impl(*this, src);
@@ -792,41 +1037,41 @@ struct vec_t<__nv_fp8_e5m2, 4> {
     cast_store_impl(ptr, *this);
   }
 
-  FLASHINFER_INLINE static void memcpy(__nv_fp8_e5m2* dst, const __nv_fp8_e5m2* src);
+  FLASHINFER_INLINE static void memcpy(__gpu_fp8_e5m2* dst, const __gpu_fp8_e5m2* src);
 };
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 4>::fill(__nv_fp8_e5m2 val) {
-  data.__x = (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-             (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 4>::fill(__gpu_fp8_e5m2 val) {
+  data.__x = (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+             (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 4>::load(const __nv_fp8_e5m2* ptr) {
-  data = *((__nv_fp8x4_e5m2*)ptr);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 4>::load(const __gpu_fp8_e5m2* ptr) {
+  data = *((__gpu_fp8x4_e5m2*)ptr);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 4>::store(__nv_fp8_e5m2* ptr) const {
-  *((__nv_fp8x4_e5m2*)ptr) = data;
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 4>::store(__gpu_fp8_e5m2* ptr) const {
+  *((__gpu_fp8x4_e5m2*)ptr) = data;
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 4>::memcpy(__nv_fp8_e5m2* dst,
-                                                       const __nv_fp8_e5m2* src) {
-  *((__nv_fp8x4_e5m2*)dst) = *((__nv_fp8x4_e5m2*)src);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 4>::memcpy(__gpu_fp8_e5m2* dst,
+                                                       const __gpu_fp8_e5m2* src) {
+  *((__gpu_fp8x4_e5m2*)dst) = *((__gpu_fp8x4_e5m2*)src);
 }
 
-// __nv_fp8_e5m2 x 8
+// __gpu_fp8_e5m2 x 8
 
 template <>
-struct vec_t<__nv_fp8_e5m2, 8> {
+struct vec_t<__gpu_fp8_e5m2, 8> {
   uint2 data;
 
-  FLASHINFER_INLINE __nv_fp8_e5m2& operator[](size_t i) { return ((__nv_fp8_e5m2*)(&data))[i]; }
-  FLASHINFER_INLINE const __nv_fp8_e5m2& operator[](size_t i) const {
-    return ((const __nv_fp8_e5m2*)(&data))[i];
+  FLASHINFER_INLINE __gpu_fp8_e5m2& operator[](size_t i) { return ((__gpu_fp8_e5m2*)(&data))[i]; }
+  FLASHINFER_INLINE const __gpu_fp8_e5m2& operator[](size_t i) const {
+    return ((const __gpu_fp8_e5m2*)(&data))[i];
   }
-  FLASHINFER_INLINE __nv_fp8_e5m2* ptr() { return reinterpret_cast<__nv_fp8_e5m2*>(&data); }
-  FLASHINFER_INLINE void fill(__nv_fp8_e5m2 val);
-  FLASHINFER_INLINE void load(const __nv_fp8_e5m2* ptr);
-  FLASHINFER_INLINE void store(__nv_fp8_e5m2* ptr) const;
+  FLASHINFER_INLINE __gpu_fp8_e5m2* ptr() { return reinterpret_cast<__gpu_fp8_e5m2*>(&data); }
+  FLASHINFER_INLINE void fill(__gpu_fp8_e5m2 val);
+  FLASHINFER_INLINE void load(const __gpu_fp8_e5m2* ptr);
+  FLASHINFER_INLINE void store(__gpu_fp8_e5m2* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 8>& src) {
     cast_from_impl(*this, src);
@@ -839,66 +1084,66 @@ struct vec_t<__nv_fp8_e5m2, 8> {
   FLASHINFER_INLINE void cast_store(T* ptr) const {
     cast_store_impl(ptr, *this);
   }
-  FLASHINFER_INLINE static void memcpy(__nv_fp8_e5m2* dst, const __nv_fp8_e5m2* src);
+  FLASHINFER_INLINE static void memcpy(__gpu_fp8_e5m2* dst, const __gpu_fp8_e5m2* src);
 };
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 8>::fill(__nv_fp8_e5m2 val) {
-  ((__nv_fp8x4_e5m2*)(&data.x))->__x =
-      (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-      (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
-  ((__nv_fp8x4_e5m2*)(&data.y))->__x =
-      (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-      (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 8>::fill(__gpu_fp8_e5m2 val) {
+  ((__gpu_fp8x4_e5m2*)(&data.x))->__x =
+      (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+      (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
+  ((__gpu_fp8x4_e5m2*)(&data.y))->__x =
+      (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+      (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 8>::load(const __nv_fp8_e5m2* ptr) {
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 8>::load(const __gpu_fp8_e5m2* ptr) {
   data = *((uint2*)ptr);
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 8>::store(__nv_fp8_e5m2* ptr) const {
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 8>::store(__gpu_fp8_e5m2* ptr) const {
   *((uint2*)ptr) = data;
 }
 
-FLASHINFER_INLINE void vec_t<__nv_fp8_e5m2, 8>::memcpy(__nv_fp8_e5m2* dst,
-                                                       const __nv_fp8_e5m2* src) {
+FLASHINFER_INLINE void vec_t<__gpu_fp8_e5m2, 8>::memcpy(__gpu_fp8_e5m2* dst,
+                                                       const __gpu_fp8_e5m2* src) {
   *((uint2*)dst) = *((uint2*)src);
 }
 
-// __nv_fp8_e5m2 x 16 or more
+// __gpu_fp8_e5m2 x 16 or more
 
 template <size_t vec_size>
-struct vec_t<__nv_fp8_e5m2, vec_size> {
+struct vec_t<__gpu_fp8_e5m2, vec_size> {
   uint4 data[vec_size / 16];
 
-  FLASHINFER_INLINE __nv_fp8_e5m2& operator[](size_t i) { return ((__nv_fp8_e5m2*)data)[i]; }
-  FLASHINFER_INLINE const __nv_fp8_e5m2& operator[](size_t i) const {
-    return ((const __nv_fp8_e5m2*)data)[i];
+  FLASHINFER_INLINE __gpu_fp8_e5m2& operator[](size_t i) { return ((__gpu_fp8_e5m2*)data)[i]; }
+  FLASHINFER_INLINE const __gpu_fp8_e5m2& operator[](size_t i) const {
+    return ((const __gpu_fp8_e5m2*)data)[i];
   }
-  FLASHINFER_INLINE __nv_fp8_e5m2* ptr() { return reinterpret_cast<__nv_fp8_e5m2*>(&data); }
-  FLASHINFER_INLINE void fill(__nv_fp8_e5m2 val) {
+  FLASHINFER_INLINE __gpu_fp8_e5m2* ptr() { return reinterpret_cast<__gpu_fp8_e5m2*>(&data); }
+  FLASHINFER_INLINE void fill(__gpu_fp8_e5m2 val) {
 #pragma unroll
     for (size_t i = 0; i < vec_size / 16; ++i) {
-      ((__nv_fp8x4_e5m2*)(&(data[i].x)))->__x =
-          (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-          (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
-      ((__nv_fp8x4_e5m2*)(&(data[i].y)))->__x =
-          (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-          (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
-      ((__nv_fp8x4_e5m2*)(&(data[i].z)))->__x =
-          (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-          (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
-      ((__nv_fp8x4_e5m2*)(&(data[i].w)))->__x =
-          (__nv_fp8x4_storage_t(val.__x) << 24) | (__nv_fp8x4_storage_t(val.__x) << 16) |
-          (__nv_fp8x4_storage_t(val.__x) << 8) | __nv_fp8x4_storage_t(val.__x);
+      ((__gpu_fp8x4_e5m2*)(&(data[i].x)))->__x =
+          (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+          (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
+      ((__gpu_fp8x4_e5m2*)(&(data[i].y)))->__x =
+          (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+          (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
+      ((__gpu_fp8x4_e5m2*)(&(data[i].z)))->__x =
+          (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+          (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
+      ((__gpu_fp8x4_e5m2*)(&(data[i].w)))->__x =
+          (__gpu_fp8x4_storage_t(val.__x) << 24) | (__gpu_fp8x4_storage_t(val.__x) << 16) |
+          (__gpu_fp8x4_storage_t(val.__x) << 8) | __gpu_fp8x4_storage_t(val.__x);
     }
   }
-  FLASHINFER_INLINE void load(const __nv_fp8_e5m2* ptr) {
+  FLASHINFER_INLINE void load(const __gpu_fp8_e5m2* ptr) {
 #pragma unroll
     for (size_t i = 0; i < vec_size / 16; ++i) {
       data[i] = ((uint4*)ptr)[i];
     }
   }
-  FLASHINFER_INLINE void store(__nv_fp8_e5m2* ptr) const {
+  FLASHINFER_INLINE void store(__gpu_fp8_e5m2* ptr) const {
 #pragma unroll
     for (size_t i = 0; i < vec_size / 16; ++i) {
       ((uint4*)ptr)[i] = data[i];
@@ -916,7 +1161,7 @@ struct vec_t<__nv_fp8_e5m2, vec_size> {
   FLASHINFER_INLINE void cast_store(T* ptr) const {
     cast_store_impl(ptr, *this);
   }
-  FLASHINFER_INLINE static void memcpy(__nv_fp8_e5m2* dst, const __nv_fp8_e5m2* src) {
+  FLASHINFER_INLINE static void memcpy(__gpu_fp8_e5m2* dst, const __gpu_fp8_e5m2* src) {
 #pragma unroll
     for (size_t i = 0; i < vec_size / 16; ++i) {
       ((uint4*)dst)[i] = ((uint4*)src)[i];
@@ -1087,20 +1332,20 @@ struct vec_t<half, vec_size> {
   }
 };
 
-/******************* vec_t<nv_bfloat16> *******************/
+/******************* vec_t<gpu_bfloat16> *******************/
 
-// nv_bfloat16 x 1
+// gpu_bfloat16 x 1
 template <>
-struct vec_t<nv_bfloat16, 1> {
-  nv_bfloat16 data;
-  FLASHINFER_INLINE nv_bfloat16& operator[](size_t i) { return ((nv_bfloat16*)(&data))[i]; }
-  FLASHINFER_INLINE const nv_bfloat16& operator[](size_t i) const {
-    return ((const nv_bfloat16*)(&data))[i];
+struct vec_t<gpu_bfloat16, 1> {
+  gpu_bfloat16 data;
+  FLASHINFER_INLINE gpu_bfloat16& operator[](size_t i) { return ((gpu_bfloat16*)(&data))[i]; }
+  FLASHINFER_INLINE const gpu_bfloat16& operator[](size_t i) const {
+    return ((const gpu_bfloat16*)(&data))[i];
   }
-  FLASHINFER_INLINE nv_bfloat16* ptr() { return reinterpret_cast<nv_bfloat16*>(&data); }
-  FLASHINFER_INLINE void fill(nv_bfloat16 val);
-  FLASHINFER_INLINE void load(const nv_bfloat16* ptr);
-  FLASHINFER_INLINE void store(nv_bfloat16* ptr) const;
+  FLASHINFER_INLINE gpu_bfloat16* ptr() { return reinterpret_cast<gpu_bfloat16*>(&data); }
+  FLASHINFER_INLINE void fill(gpu_bfloat16 val);
+  FLASHINFER_INLINE void load(const gpu_bfloat16* ptr);
+  FLASHINFER_INLINE void store(gpu_bfloat16* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 1>& src) {
     cast_from_impl(*this, src);
@@ -1113,32 +1358,32 @@ struct vec_t<nv_bfloat16, 1> {
   FLASHINFER_INLINE void cast_store(T* ptr) const {
     cast_store_impl(ptr, *this);
   }
-  FLASHINFER_INLINE static void memcpy(nv_bfloat16* dst, const nv_bfloat16* src);
+  FLASHINFER_INLINE static void memcpy(gpu_bfloat16* dst, const gpu_bfloat16* src);
 };
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 1>::fill(nv_bfloat16 val) { data = val; }
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 1>::fill(gpu_bfloat16 val) { data = val; }
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 1>::load(const nv_bfloat16* ptr) { data = *ptr; }
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 1>::load(const gpu_bfloat16* ptr) { data = *ptr; }
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 1>::store(nv_bfloat16* ptr) const { *ptr = data; }
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 1>::store(gpu_bfloat16* ptr) const { *ptr = data; }
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 1>::memcpy(nv_bfloat16* dst, const nv_bfloat16* src) {
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 1>::memcpy(gpu_bfloat16* dst, const gpu_bfloat16* src) {
   *dst = *src;
 }
 
-// nv_bfloat16 x 2
+// gpu_bfloat16 x 2
 template <>
-struct vec_t<nv_bfloat16, 2> {
-  nv_bfloat162 data;
+struct vec_t<gpu_bfloat16, 2> {
+  gpu_bfloat162 data;
 
-  FLASHINFER_INLINE nv_bfloat16& operator[](size_t i) { return ((nv_bfloat16*)(&data))[i]; }
-  FLASHINFER_INLINE const nv_bfloat16& operator[](size_t i) const {
-    return ((const nv_bfloat16*)(&data))[i];
+  FLASHINFER_INLINE gpu_bfloat16& operator[](size_t i) { return ((gpu_bfloat16*)(&data))[i]; }
+  FLASHINFER_INLINE const gpu_bfloat16& operator[](size_t i) const {
+    return ((const gpu_bfloat16*)(&data))[i];
   }
-  FLASHINFER_INLINE nv_bfloat16* ptr() { return reinterpret_cast<nv_bfloat16*>(&data); }
-  FLASHINFER_INLINE void fill(nv_bfloat16 val);
-  FLASHINFER_INLINE void load(const nv_bfloat16* ptr);
-  FLASHINFER_INLINE void store(nv_bfloat16* ptr) const;
+  FLASHINFER_INLINE gpu_bfloat16* ptr() { return reinterpret_cast<gpu_bfloat16*>(&data); }
+  FLASHINFER_INLINE void fill(gpu_bfloat16 val);
+  FLASHINFER_INLINE void load(const gpu_bfloat16* ptr);
+  FLASHINFER_INLINE void store(gpu_bfloat16* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 2>& src) {
     cast_from_impl(*this, src);
@@ -1151,39 +1396,39 @@ struct vec_t<nv_bfloat16, 2> {
   FLASHINFER_INLINE void cast_store(T* ptr) const {
     cast_store_impl(ptr, *this);
   }
-  FLASHINFER_INLINE static void memcpy(nv_bfloat16* dst, const nv_bfloat16* src);
+  FLASHINFER_INLINE static void memcpy(gpu_bfloat16* dst, const gpu_bfloat16* src);
 };
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 2>::fill(nv_bfloat16 val) {
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 2>::fill(gpu_bfloat16 val) {
   data = make_bfloat162(val, val);
 }
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 2>::load(const nv_bfloat16* ptr) {
-  data = *((nv_bfloat162*)ptr);
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 2>::load(const gpu_bfloat16* ptr) {
+  data = *((gpu_bfloat162*)ptr);
 }
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 2>::store(nv_bfloat16* ptr) const {
-  *((nv_bfloat162*)ptr) = data;
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 2>::store(gpu_bfloat16* ptr) const {
+  *((gpu_bfloat162*)ptr) = data;
 }
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 2>::memcpy(nv_bfloat16* dst, const nv_bfloat16* src) {
-  *((nv_bfloat162*)dst) = *((nv_bfloat162*)src);
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 2>::memcpy(gpu_bfloat16* dst, const gpu_bfloat16* src) {
+  *((gpu_bfloat162*)dst) = *((gpu_bfloat162*)src);
 }
 
-// nv_bfloat16 x 4
+// gpu_bfloat16 x 4
 
 template <>
-struct vec_t<nv_bfloat16, 4> {
+struct vec_t<gpu_bfloat16, 4> {
   uint2 data;
 
-  FLASHINFER_INLINE nv_bfloat16& operator[](size_t i) { return ((nv_bfloat16*)(&data))[i]; }
-  FLASHINFER_INLINE const nv_bfloat16& operator[](size_t i) const {
-    return ((const nv_bfloat16*)(&data))[i];
+  FLASHINFER_INLINE gpu_bfloat16& operator[](size_t i) { return ((gpu_bfloat16*)(&data))[i]; }
+  FLASHINFER_INLINE const gpu_bfloat16& operator[](size_t i) const {
+    return ((const gpu_bfloat16*)(&data))[i];
   }
-  FLASHINFER_INLINE nv_bfloat16* ptr() { return reinterpret_cast<nv_bfloat16*>(&data); }
-  FLASHINFER_INLINE void fill(nv_bfloat16 val);
-  FLASHINFER_INLINE void load(const nv_bfloat16* ptr);
-  FLASHINFER_INLINE void store(nv_bfloat16* ptr) const;
+  FLASHINFER_INLINE gpu_bfloat16* ptr() { return reinterpret_cast<gpu_bfloat16*>(&data); }
+  FLASHINFER_INLINE void fill(gpu_bfloat16 val);
+  FLASHINFER_INLINE void load(const gpu_bfloat16* ptr);
+  FLASHINFER_INLINE void store(gpu_bfloat16* ptr) const;
   template <typename T>
   FLASHINFER_INLINE void cast_from(const vec_t<T, 4>& src) {
     cast_from_impl(*this, src);
@@ -1196,53 +1441,53 @@ struct vec_t<nv_bfloat16, 4> {
   FLASHINFER_INLINE void cast_store(T* ptr) const {
     cast_store_impl(ptr, *this);
   }
-  FLASHINFER_INLINE static void memcpy(nv_bfloat16* dst, const nv_bfloat16* src);
+  FLASHINFER_INLINE static void memcpy(gpu_bfloat16* dst, const gpu_bfloat16* src);
 };
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 4>::fill(nv_bfloat16 val) {
-  *(nv_bfloat162*)(&data.x) = make_bfloat162(val, val);
-  *(nv_bfloat162*)(&data.y) = make_bfloat162(val, val);
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 4>::fill(gpu_bfloat16 val) {
+  *(gpu_bfloat162*)(&data.x) = make_bfloat162(val, val);
+  *(gpu_bfloat162*)(&data.y) = make_bfloat162(val, val);
 }
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 4>::load(const nv_bfloat16* ptr) {
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 4>::load(const gpu_bfloat16* ptr) {
   data = *((uint2*)ptr);
 }
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 4>::store(nv_bfloat16* ptr) const {
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 4>::store(gpu_bfloat16* ptr) const {
   *((uint2*)ptr) = data;
 }
 
-FLASHINFER_INLINE void vec_t<nv_bfloat16, 4>::memcpy(nv_bfloat16* dst, const nv_bfloat16* src) {
+FLASHINFER_INLINE void vec_t<gpu_bfloat16, 4>::memcpy(gpu_bfloat16* dst, const gpu_bfloat16* src) {
   *((uint2*)dst) = *((uint2*)src);
 }
 
-// nv_bfloat16 x 8 or more
+// gpu_bfloat16 x 8 or more
 
 template <size_t vec_size>
-struct vec_t<nv_bfloat16, vec_size> {
+struct vec_t<gpu_bfloat16, vec_size> {
   uint4 data[vec_size / 8];
 
-  FLASHINFER_INLINE nv_bfloat16& operator[](size_t i) { return ((nv_bfloat16*)data)[i]; }
-  FLASHINFER_INLINE const nv_bfloat16& operator[](size_t i) const {
-    return ((const nv_bfloat16*)data)[i];
+  FLASHINFER_INLINE gpu_bfloat16& operator[](size_t i) { return ((gpu_bfloat16*)data)[i]; }
+  FLASHINFER_INLINE const gpu_bfloat16& operator[](size_t i) const {
+    return ((const gpu_bfloat16*)data)[i];
   }
-  FLASHINFER_INLINE nv_bfloat16* ptr() { return reinterpret_cast<nv_bfloat16*>(&data); }
-  FLASHINFER_INLINE void fill(nv_bfloat16 val) {
+  FLASHINFER_INLINE gpu_bfloat16* ptr() { return reinterpret_cast<gpu_bfloat16*>(&data); }
+  FLASHINFER_INLINE void fill(gpu_bfloat16 val) {
 #pragma unoll
     for (size_t i = 0; i < vec_size / 8; ++i) {
-      *(nv_bfloat162*)(&(data[i].x)) = make_bfloat162(val, val);
-      *(nv_bfloat162*)(&(data[i].y)) = make_bfloat162(val, val);
-      *(nv_bfloat162*)(&(data[i].z)) = make_bfloat162(val, val);
-      *(nv_bfloat162*)(&(data[i].w)) = make_bfloat162(val, val);
+      *(gpu_bfloat162*)(&(data[i].x)) = make_bfloat162(val, val);
+      *(gpu_bfloat162*)(&(data[i].y)) = make_bfloat162(val, val);
+      *(gpu_bfloat162*)(&(data[i].z)) = make_bfloat162(val, val);
+      *(gpu_bfloat162*)(&(data[i].w)) = make_bfloat162(val, val);
     }
   }
-  FLASHINFER_INLINE void load(const nv_bfloat16* ptr) {
+  FLASHINFER_INLINE void load(const gpu_bfloat16* ptr) {
 #pragma unoll
     for (size_t i = 0; i < vec_size / 8; ++i) {
       data[i] = ((uint4*)ptr)[i];
     }
   }
-  FLASHINFER_INLINE void store(nv_bfloat16* ptr) const {
+  FLASHINFER_INLINE void store(gpu_bfloat16* ptr) const {
 #pragma unoll
     for (size_t i = 0; i < vec_size / 8; ++i) {
       ((uint4*)ptr)[i] = data[i];
@@ -1260,7 +1505,7 @@ struct vec_t<nv_bfloat16, vec_size> {
   FLASHINFER_INLINE void cast_store(T* ptr) const {
     cast_store_impl(ptr, *this);
   }
-  FLASHINFER_INLINE static void memcpy(nv_bfloat16* dst, const nv_bfloat16* src) {
+  FLASHINFER_INLINE static void memcpy(gpu_bfloat16* dst, const gpu_bfloat16* src) {
 #pragma unoll
     for (size_t i = 0; i < vec_size / 8; ++i) {
       ((uint4*)dst)[i] = ((uint4*)src)[i];

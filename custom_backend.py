@@ -35,6 +35,9 @@ def build_editable(wheel_directory, config_settings=None, metadata_directory=Non
                 dst.rmdir()
         dst.symlink_to(src, target_is_directory=True)
 
+    # FIXME
+    # if not check_hip_availability():
+    #     ln("3rdparty/cutlass", "cutlass")
     ln("3rdparty/cutlass", "cutlass")
     ln("csrc", "csrc")
     ln("include", "include")

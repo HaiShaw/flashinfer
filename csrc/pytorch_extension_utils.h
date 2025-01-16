@@ -14,10 +14,19 @@
  * limitations under the License.
  */
 #pragma once
+
 // NOTE(Zihao): only include minimal headers to accelerate compilation
+#include <flashinfer/gpu_defines_cuda_hip.h>
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+// #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__) || defined(__HIP_PLATFORM_AMD__)
+#include <hip/hip_bf16.h>
+#include <hip/hip_fp16.h>
+#include <hip/hip_fp8.h>
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
+#endif
 #include <torch/csrc/utils/pybind.h>
 
 #ifdef FLASHINFER_ENABLE_BF16
@@ -25,11 +34,11 @@
   [&]() -> bool {                                                                        \
     switch (pytorch_dtype) {                                                             \
       case at::ScalarType::Half: {                                                       \
-        using c_type = nv_half;                                                          \
+        using c_type = __half;                                                           \
         return __VA_ARGS__();                                                            \
       }                                                                                  \
       case at::ScalarType::BFloat16: {                                                   \
-        using c_type = nv_bfloat16;                                                      \
+        using c_type = gpu_bfloat16;                                                     \
         return __VA_ARGS__();                                                            \
       }                                                                                  \
       default:                                                                           \
@@ -44,7 +53,7 @@
   [&]() -> bool {                                                                        \
     switch (pytorch_dtype) {                                                             \
       case at::ScalarType::Half: {                                                       \
-        using c_type = nv_half;                                                          \
+        using c_type = __half;                                                           \
         return __VA_ARGS__();                                                            \
       }                                                                                  \
       default:                                                                           \
@@ -61,11 +70,11 @@
   [&]() -> bool {                                                                            \
     switch (pytorch_dtype) {                                                                 \
       case at::ScalarType::Float8_e4m3fn: {                                                  \
-        using c_type = __nv_fp8_e4m3;                                                        \
+        using c_type = __gpu_fp8_e4m3;                                                       \
         return __VA_ARGS__();                                                                \
       }                                                                                      \
       case at::ScalarType::Float8_e5m2: {                                                    \
-        using c_type = __nv_fp8_e5m2;                                                        \
+        using c_type = __gpu_fp8_e5m2;                                                       \
         return __VA_ARGS__();                                                                \
       }                                                                                      \
       default:                                                                               \
@@ -90,19 +99,19 @@
   [&]() -> bool {                                                                        \
     switch (pytorch_dtype) {                                                             \
       case at::ScalarType::Half: {                                                       \
-        using c_type = nv_half;                                                          \
+        using c_type = __half;                                                           \
         return __VA_ARGS__();                                                            \
       }                                                                                  \
       case at::ScalarType::BFloat16: {                                                   \
-        using c_type = nv_bfloat16;                                                      \
+        using c_type = gpu_bfloat16;                                                     \
         return __VA_ARGS__();                                                            \
       }                                                                                  \
       case at::ScalarType::Float8_e4m3fn: {                                              \
-        using c_type = __nv_fp8_e4m3;                                                    \
+        using c_type = __gpu_fp8_e4m3;                                                   \
         return __VA_ARGS__();                                                            \
       }                                                                                  \
       case at::ScalarType::Float8_e5m2: {                                                \
-        using c_type = __nv_fp8_e5m2;                                                    \
+        using c_type = __gpu_fp8_e5m2;                                                   \
         return __VA_ARGS__();                                                            \
       }                                                                                  \
       default:                                                                           \
@@ -117,11 +126,11 @@
   [&]() -> bool {                                                                        \
     switch (pytorch_dtype) {                                                             \
       case at::ScalarType::Half: {                                                       \
-        using c_type = nv_half;                                                          \
+        using c_type = __half;                                                           \
         return __VA_ARGS__();                                                            \
       }                                                                                  \
       case at::ScalarType::BFloat16: {                                                   \
-        using c_type = nv_bfloat16;                                                      \
+        using c_type = gpu_bfloat16;                                                     \
         return __VA_ARGS__();                                                            \
       }                                                                                  \
       default:                                                                           \
@@ -136,15 +145,15 @@
   [&]() -> bool {                                                                            \
     switch (pytorch_dtype) {                                                                 \
       case at::ScalarType::Half: {                                                           \
-        using c_type = nv_half;                                                              \
+        using c_type = __half;                                                               \
         return __VA_ARGS__();                                                                \
       }                                                                                      \
       case at::ScalarType::Float8_e4m3fn: {                                                  \
-        using c_type = __nv_fp8_e4m3;                                                        \
+        using c_type = __gpu_fp8_e4m3;                                                       \
         return __VA_ARGS__();                                                                \
       }                                                                                      \
       case at::ScalarType::Float8_e5m2: {                                                    \
-        using c_type = __nv_fp8_e5m2;                                                        \
+        using c_type = __gpu_fp8_e5m2;                                                       \
         return __VA_ARGS__();                                                                \
       }                                                                                      \
       default:                                                                               \
@@ -159,7 +168,7 @@
   [&]() -> bool {                                                                        \
     switch (pytorch_dtype) {                                                             \
       case at::ScalarType::Half: {                                                       \
-        using c_type = nv_half;                                                          \
+        using c_type = __half;                                                           \
         return __VA_ARGS__();                                                            \
       }                                                                                  \
       default:                                                                           \
