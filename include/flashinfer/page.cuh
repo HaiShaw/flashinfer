@@ -20,6 +20,7 @@
 
 #include <vector>
 
+#include "gpu_defines_cuda_hip.h"
 #include "fastdiv.cuh"
 #include "layout.cuh"
 #include "utils.cuh"
@@ -301,15 +302,15 @@ __global__ void BlockSparseIndicesToVectorSparseOffsetsKernel(
 }
 
 template <typename IdType>
-cudaError_t BlockSparseIndicesToVectorSparseOffset(
+gpuError_t BlockSparseIndicesToVectorSparseOffset(
     IdType* block_sparse_indices, IdType* block_sparse_indptr, IdType* vector_sparse_offsets,
     IdType* vector_sparse_indptr, IdType* kv_lens, const int64_t stride_block,
     const int64_t stride_n, const int64_t batch_size, const uint32_t block_size,
-    cudaStream_t stream = nullptr) {
+    gpuStream_t stream = nullptr) {
   int dev_id = 0;
   int num_sms = 0;
-  FLASHINFER_CUDA_CALL(cudaGetDevice(&dev_id));
-  FLASHINFER_CUDA_CALL(cudaDeviceGetAttribute(&num_sms, cudaDevAttrMultiProcessorCount, dev_id));
+  FLASHINFER_CUDA_CALL(gpuGetDevice(&dev_id));
+  FLASHINFER_CUDA_CALL(gpuDeviceGetAttribute(&num_sms, gpuDevAttrMultiProcessorCount, dev_id));
 
   uint32_t num_threads = 512;
 
@@ -326,9 +327,9 @@ cudaError_t BlockSparseIndicesToVectorSparseOffset(
                   (void*)&batch_size,
                   (void*)&block_size_fastdiv};
 
-  FLASHINFER_CUDA_CALL(cudaLaunchKernel((void*)kernel, num_sms, num_threads, args, 0, stream));
+  FLASHINFER_CUDA_CALL(gpuLaunchKernel((void*)kernel, num_sms, num_threads, args, 0, stream));
 
-  return cudaSuccess;
+  return gpuSuccess;
 }
 
 /*!
