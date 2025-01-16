@@ -35,7 +35,7 @@
 #include "../exception.h"
 #include "../pos_enc.cuh"
 #include "../utils.cuh"
-#include "heap.h"
+#include "./heap.h"
 
 namespace flashinfer {
 
