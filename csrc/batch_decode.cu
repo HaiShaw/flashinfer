@@ -16,6 +16,7 @@
 #include <flashinfer/attention/scheduler.cuh>
 #include <flashinfer/pos_enc.cuh>
 #include <flashinfer/utils.cuh>
+#include <flashinfer/gpu_defines_cuda_hip.h>
 #include <optional>
 
 #include "batch_decode_config.inc"
@@ -26,8 +27,8 @@ namespace flashinfer {
 
 template <uint32_t HEAD_DIM, PosEncodingMode POS_ENCODING_MODE, typename AttentionVariant,
           typename Params>
-cudaError_t BatchDecodeWithPagedKVCacheDispatched(Params params, typename Params::DTypeO* tmp_v,
-                                                  float* tmp_s, cudaStream_t stream);
+gpuError_t BatchDecodeWithPagedKVCacheDispatched(Params params, typename Params::DTypeO* tmp_v,
+                                                  float* tmp_s, gpuStream_t stream);
 
 }  // namespace flashinfer
 
@@ -53,14 +54,14 @@ at::Tensor BatchDecodeWithPagedKVCachePlan(
               "CUDA cores template only supports equal head dim for QK and VO, please use tensor "
               "cores template for different head dim");
 
-  cudaStream_t stream = reinterpret_cast<cudaStream_t>(cuda_stream);
+  gpuStream_t stream = reinterpret_cast<gpuStream_t>(cuda_stream);
   DISPATCH_context(
       DTypeQ, DTypeKV, DTypeO, IdType, HEAD_DIM_QK, HEAD_DIM_VO, POS_ENCODING_MODE,
       USE_SLIDING_WINDOW, USE_LOGITS_SOFT_CAP, AttentionVariant, Params, [&] {
         DISPATCH_GQA_GROUP_SIZE(num_qo_heads / num_kv_heads, GROUP_SIZE, {
           auto work_estimation_func = BatchDecodeWithPagedKVCacheWorkEstimationDispatched<
               GROUP_SIZE, HEAD_DIM_QK, POS_ENCODING_MODE, AttentionVariant, Params>;
-          cudaError_t status = DecodePlan<HEAD_DIM_QK, POS_ENCODING_MODE, AttentionVariant, Params>(
+          gpuError_t status = DecodePlan<HEAD_DIM_QK, POS_ENCODING_MODE, AttentionVariant, Params>(
               static_cast<void*>(float_workspace_buffer.data_ptr()), float_workspace_size_in_bytes,
               static_cast<void*>(int_workspace_buffer.data_ptr()),
               static_cast<void*>(page_locked_int_workspace_buffer.data_ptr()),
@@ -68,8 +69,8 @@ at::Tensor BatchDecodeWithPagedKVCachePlan(
               batch_size, num_qo_heads, page_size, enable_cuda_graph,
               /*stream=*/stream, work_estimation_func);
 
-          TORCH_CHECK(status == cudaSuccess, "BatchDecodeWithPagedKVCache failed with error ",
-                      cudaGetErrorString(status));
+          TORCH_CHECK(status == gpuSuccess, "BatchDecodeWithPagedKVCache failed with error ",
+                      gpuGetErrorString(status));
           return true;
         });
       });
@@ -129,7 +130,7 @@ void BatchDecodeWithPagedKVCacheRun(
   TORCH_CHECK(k_strides == v_strides, "k/v strides must be identical");
   kv_cache_strides = k_strides.data();
 
-  cudaStream_t stream = reinterpret_cast<cudaStream_t>(cuda_stream);
+  gpuStream_t stream = reinterpret_cast<gpuStream_t>(cuda_stream);
 
   DISPATCH_context(
       DTypeQ, DTypeKV, DTypeO, IdType, HEAD_DIM_QK, HEAD_DIM_VO, POS_ENCODING_MODE,
@@ -180,13 +181,13 @@ void BatchDecodeWithPagedKVCacheRun(
         }
         params.padded_batch_size = plan_info.padded_batch_size;
 
-        cudaError_t status =
+        gpuError_t status =
             flashinfer::BatchDecodeWithPagedKVCacheDispatched<HEAD_DIM_QK, POS_ENCODING_MODE,
                                                               AttentionVariant>(params, tmp_v,
                                                                                 tmp_s,
                                                                                 /*stream=*/stream);
-        TORCH_CHECK(status == cudaSuccess, "BatchDecodeWithPagedKVCache failed with error ",
-                    cudaGetErrorString(status));
+        TORCH_CHECK(status == gpuSuccess, "BatchDecodeWithPagedKVCache failed with error ",
+                    gpuGetErrorString(status));
         return true;
       });
 }

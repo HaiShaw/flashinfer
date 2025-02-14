@@ -19,7 +19,7 @@
 #include <memory>
 #include <sstream>
 
-#include "exception.h"
+#include "./exception.h"
 
 namespace flashinfer {
 

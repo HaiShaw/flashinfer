@@ -18,16 +18,28 @@
 
 #include <torch/library.h>
 
+#include <flashinfer/gpu_defines_cuda_hip.h>
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+// #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__) || defined(__HIP_PLATFORM_AMD__)
+#ifdef FLASHINFER_ENABLE_BF16
+#include <hip/hip_bf16.h>
+#endif
+#ifdef FLASHINFER_ENABLE_F16
+#include <hip/hip_fp16.h>
+#endif
+#if defined(FLASHINFER_ENABLE_FP8_E4M3) || defined(FLASHINFER_ENABLE_FP8_E5M2)
+#include <hip/hip_fp8.h>
+#endif
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #ifdef FLASHINFER_ENABLE_BF16
 #include <cuda_bf16.h>
 #endif
-
 #ifdef FLASHINFER_ENABLE_F16
 #include <cuda_fp16.h>
 #endif
-
 #if defined(FLASHINFER_ENABLE_FP8_E4M3) || defined(FLASHINFER_ENABLE_FP8_E5M2)
 #include <cuda_fp8.h>
+#endif
 #endif
 
 #ifndef FLASHINFER_EXT_MODULE_INITED
@@ -65,7 +77,7 @@ FLASHINFER_EXT_MODULE_INIT_EXPAND(TORCH_EXTENSION_NAME)
 #ifdef FLASHINFER_ENABLE_F16
 #define _DISPATCH_CASE_F16(c_type, ...) \
   case at::ScalarType::Half: {          \
-    using c_type = nv_half;             \
+    using c_type = __half;              \
     return __VA_ARGS__();               \
   }
 #else
@@ -75,7 +87,7 @@ FLASHINFER_EXT_MODULE_INIT_EXPAND(TORCH_EXTENSION_NAME)
 #ifdef FLASHINFER_ENABLE_BF16
 #define _DISPATCH_CASE_BF16(c_type, ...) \
   case at::ScalarType::BFloat16: {       \
-    using c_type = nv_bfloat16;          \
+    using c_type = gpu_bfloat16;         \
     return __VA_ARGS__();                \
   }
 #else
@@ -85,7 +97,7 @@ FLASHINFER_EXT_MODULE_INIT_EXPAND(TORCH_EXTENSION_NAME)
 #ifdef FLASHINFER_ENABLE_FP8_E4M3
 #define _DISPATCH_CASE_FP8_E4M3(c_type, ...) \
   case at::ScalarType::Float8_e4m3fn: {      \
-    using c_type = __nv_fp8_e4m3;            \
+    using c_type = __gpu_fp8_e4m3;           \
     return __VA_ARGS__();                    \
   }
 #else
@@ -95,7 +107,7 @@ FLASHINFER_EXT_MODULE_INIT_EXPAND(TORCH_EXTENSION_NAME)
 #ifdef FLASHINFER_ENABLE_FP8_E5M2
 #define _DISPATCH_CASE_FP8_E5M2(c_type, ...) \
   case at::ScalarType::Float8_e5m2: {        \
-    using c_type = __nv_fp8_e5m2;            \
+    using c_type = __gpu_fp8_e5m2;           \
     return __VA_ARGS__();                    \
   }
 #else
