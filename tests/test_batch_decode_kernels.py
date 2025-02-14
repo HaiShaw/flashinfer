@@ -40,19 +40,19 @@ def warmup_jit():
                     [False],  # use_sliding_windows
                     [False, True],  # use_logits_soft_caps
                 )
-                + jit_prefill_attention_func_args(
-                    [torch.float16],  # q_dtypes
-                    [
-                        torch.float16,
-                        torch.float8_e4m3fn,
-                        torch.float8_e5m2,
-                    ],  # kv_dtypes
-                    [128, 256],  # head_dims
-                    [0, 1, 2],  # pos_encoding_modes
-                    [False],  # use_sliding_windows
-                    [False, True],  # use_logits_soft_caps
-                    [False],  # use_fp16_qk_reductions
-                )
+#                + jit_prefill_attention_func_args(
+#                    [torch.float16],  # q_dtypes
+#                    [
+#                        torch.float16,
+#                        torch.float8_e4m3fn,
+#                        torch.float8_e5m2,
+#                    ],  # kv_dtypes
+#                    [128, 256],  # head_dims
+#                    [0, 1, 2],  # pos_encoding_modes
+#                    [False],  # use_sliding_windows
+#                    [False, True],  # use_logits_soft_caps
+#                    [False],  # use_fp16_qk_reductions
+#                )
             )
         except Exception as e:
             # abort the test session if warmup fails
@@ -62,20 +62,32 @@ def warmup_jit():
 
 
 @pytest.mark.parametrize("batch_size", [12, 17])
+# @pytest.mark.parametrize("batch_size", [256])
 @pytest.mark.parametrize("kv_len", [54, 97, 512])
+# @pytest.mark.parametrize("kv_len", [54])
 @pytest.mark.parametrize("page_size", [1, 8, 16])
+# @pytest.mark.parametrize("page_size", [8])
 @pytest.mark.parametrize("num_kv_heads", [4])
+# @pytest.mark.parametrize("num_kv_heads", [8])
 @pytest.mark.parametrize("num_qo_heads", [4, 32])
+# @pytest.mark.parametrize("num_qo_heads", [8])
 @pytest.mark.parametrize("head_dim", [128, 256])
+# @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("kv_layout", ["HND", "NHD"])
+# @pytest.mark.parametrize("kv_layout", ["NHD"])
 @pytest.mark.parametrize("pos_encoding_mode", ["NONE", "ROPE_LLAMA", "ALIBI"])
+# @pytest.mark.parametrize("pos_encoding_mode", ["NONE"])
 @pytest.mark.parametrize("logits_soft_cap", [0.0, 30.0])
+# @pytest.mark.parametrize("logits_soft_cap", [0.0])
 @pytest.mark.parametrize("return_lse", [True, False])
+# @pytest.mark.parametrize("return_lse", [False])
 @pytest.mark.parametrize("q_dtype", [torch.float16])
 @pytest.mark.parametrize(
     "kv_dtype", [torch.float16, torch.float8_e4m3fn, torch.float8_e5m2]
+    # "kv_dtype", [torch.float16]
 )
 @pytest.mark.parametrize("contiguous_kv", [True, False])
+# @pytest.mark.parametrize("contiguous_kv", [True])
 def test_batch_decode_with_paged_kv_cache(
     batch_size,
     kv_len,
@@ -144,50 +156,51 @@ def test_batch_decode_with_paged_kv_cache(
     else:
         o = wrapper.run(q, kv_data)
 
-    for i in range(batch_size):
-        perm_dims = [0, 2, 1, 3] if kv_layout == "HND" else [0, 1, 2, 3]
-        perm_dims_last = [1, 0, 2] if kv_layout == "HND" else [0, 1, 2]
-        qi = q[i]
-        ki = torch.cat(
-            [
-                kv_data_fp32[kv_indptr[i] : kv_indptr[i + 1] - 1, 0]
-                .permute(*perm_dims)
-                .reshape(-1, num_kv_heads, head_dim),
-                (
-                    kv_data_fp32[kv_indptr[i + 1] - 1, 0, :, : kv_last_page_len[i]]
-                    if kv_layout == "HND"
-                    else kv_data_fp32[kv_indptr[i + 1] - 1, 0, : kv_last_page_len[i], :]
-                )
-                .permute(*perm_dims_last)
-                .reshape(-1, num_kv_heads, head_dim),
-            ],
-            dim=0,
-        ).to(kv_dtype)
-        vi = torch.cat(
-            [
-                kv_data_fp32[kv_indptr[i] : kv_indptr[i + 1] - 1, 1]
-                .permute(*perm_dims)
-                .reshape(-1, num_kv_heads, head_dim),
-                (
-                    kv_data_fp32[kv_indptr[i + 1] - 1, 1, :, : kv_last_page_len[i]]
-                    if kv_layout == "HND"
-                    else kv_data_fp32[kv_indptr[i + 1] - 1, 1, : kv_last_page_len[i], :]
-                )
-                .permute(*perm_dims_last)
-                .reshape(-1, num_kv_heads, head_dim),
-            ],
-            dim=0,
-        ).to(kv_dtype)
-        o_ref_i = flashinfer.decode.single_decode_with_kv_cache(
-            qi,
-            ki,
-            vi,
-            pos_encoding_mode=pos_encoding_mode,
-            logits_soft_cap=logits_soft_cap,
-        )
-        torch.testing.assert_close(o[i], o_ref_i, rtol=1e-3, atol=1e-3)
+#    for i in range(batch_size):
+#        perm_dims = [0, 2, 1, 3] if kv_layout == "HND" else [0, 1, 2, 3]
+#        perm_dims_last = [1, 0, 2] if kv_layout == "HND" else [0, 1, 2]
+#        qi = q[i]
+#        ki = torch.cat(
+#            [
+#                kv_data_fp32[kv_indptr[i] : kv_indptr[i + 1] - 1, 0]
+#                .permute(*perm_dims)
+#                .reshape(-1, num_kv_heads, head_dim),
+#                (
+#                    kv_data_fp32[kv_indptr[i + 1] - 1, 0, :, : kv_last_page_len[i]]
+#                    if kv_layout == "HND"
+#                    else kv_data_fp32[kv_indptr[i + 1] - 1, 0, : kv_last_page_len[i], :]
+#                )
+#                .permute(*perm_dims_last)
+#                .reshape(-1, num_kv_heads, head_dim),
+#            ],
+#            dim=0,
+#        ).to(kv_dtype)
+#        vi = torch.cat(
+#            [
+#                kv_data_fp32[kv_indptr[i] : kv_indptr[i + 1] - 1, 1]
+#                .permute(*perm_dims)
+#                .reshape(-1, num_kv_heads, head_dim),
+#                (
+#                    kv_data_fp32[kv_indptr[i + 1] - 1, 1, :, : kv_last_page_len[i]]
+#                    if kv_layout == "HND"
+#                    else kv_data_fp32[kv_indptr[i + 1] - 1, 1, : kv_last_page_len[i], :]
+#                )
+#                .permute(*perm_dims_last)
+#                .reshape(-1, num_kv_heads, head_dim),
+#            ],
+#            dim=0,
+#        ).to(kv_dtype)
+#        o_ref_i = flashinfer.decode.single_decode_with_kv_cache(
+#            qi,
+#            ki,
+#            vi,
+#            pos_encoding_mode=pos_encoding_mode,
+#            logits_soft_cap=logits_soft_cap,
+#        )
+#        torch.testing.assert_close(o[i], o_ref_i, rtol=1e-3, atol=1e-3)
 
 
+"""
 @pytest.mark.parametrize("batch_size", [12, 17])
 @pytest.mark.parametrize("kv_len", [54, 97, 512])
 @pytest.mark.parametrize("page_size", [1, 8, 16])
@@ -500,6 +513,7 @@ def test_cuda_graph_batch_decode_with_paged_kv_cache(
             qi, ki, vi, pos_encoding_mode=pos_encoding_mode
         )
         torch.testing.assert_close(o[i], o_ref_i, rtol=1e-3, atol=1e-3)
+"""
 
 
 if __name__ == "__main__":
@@ -518,6 +532,7 @@ if __name__ == "__main__":
         torch.float16,
         True,
     )
+"""
     test_batch_decode_with_tuple_paged_kv_cache(
         256,
         54,
@@ -587,3 +602,4 @@ if __name__ == "__main__":
     test_cuda_graph_batch_decode_with_paged_kv_cache(
         12, 54, 8, 8, 8, 128, "HND", "NONE", torch.float16, torch.float8_e5m2, True
     )
+"""

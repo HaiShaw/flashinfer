@@ -20,6 +20,7 @@
 
 #include <vector>
 
+#include "gpu_defines_cuda_hip.h"
 #include "fastdiv.cuh"
 #include "layout.cuh"
 #include "utils.cuh"
@@ -301,15 +302,15 @@ __global__ void BlockSparseIndicesToVectorSparseOffsetsKernel(
 }
 
 template <typename IdType>
-cudaError_t BlockSparseIndicesToVectorSparseOffset(
+gpuError_t BlockSparseIndicesToVectorSparseOffset(
     IdType* block_sparse_indices, IdType* block_sparse_indptr, IdType* vector_sparse_offsets,
     IdType* vector_sparse_indptr, IdType* kv_lens, const int64_t stride_block,
     const int64_t stride_n, const int64_t batch_size, const uint32_t block_size,
-    cudaStream_t stream = nullptr) {
+    gpuStream_t stream = nullptr) {
   int dev_id = 0;
   int num_sms = 0;
-  FLASHINFER_CUDA_CALL(cudaGetDevice(&dev_id));
-  FLASHINFER_CUDA_CALL(cudaDeviceGetAttribute(&num_sms, cudaDevAttrMultiProcessorCount, dev_id));
+  FLASHINFER_CUDA_CALL(gpuGetDevice(&dev_id));
+  FLASHINFER_CUDA_CALL(gpuDeviceGetAttribute(&num_sms, gpuDevAttrMultiProcessorCount, dev_id));
 
   uint32_t num_threads = 512;
 
@@ -326,9 +327,9 @@ cudaError_t BlockSparseIndicesToVectorSparseOffset(
                   (void*)&batch_size,
                   (void*)&block_size_fastdiv};
 
-  FLASHINFER_CUDA_CALL(cudaLaunchKernel((void*)kernel, num_sms, num_threads, args, 0, stream));
+  FLASHINFER_CUDA_CALL(gpuLaunchKernel((void*)kernel, num_sms, num_threads, args, 0, stream));
 
-  return cudaSuccess;
+  return gpuSuccess;
 }
 
 /*!
@@ -342,8 +343,8 @@ cudaError_t BlockSparseIndicesToVectorSparseOffset(
  * \return status Indicates whether CUDA calls are successful
  */
 template <typename DType, typename IdType>
-cudaError_t AppendPagedKVCacheDecode(paged_kv_t<DType, IdType> paged_kv, DType* key, DType* value,
-                                     cudaStream_t stream = nullptr) {
+gpuError_t AppendPagedKVCacheDecode(paged_kv_t<DType, IdType> paged_kv, DType* key, DType* value,
+                                    gpuStream_t stream = nullptr) {
   uint32_t head_dim = paged_kv.head_dim;
   uint32_t batch_size = paged_kv.batch_size;
   uint32_t num_heads = paged_kv.num_heads;
@@ -356,9 +357,9 @@ cudaError_t AppendPagedKVCacheDecode(paged_kv_t<DType, IdType> paged_kv, DType* 
     dim3 nthrs(bdx, bdy);
     auto kernel = AppendPagedKVCacheDecodeKernel<HEAD_DIM, vec_size, DType, IdType>;
     void* args[] = {(void*)&paged_kv, (void*)&key, (void*)&value};
-    FLASHINFER_CUDA_CALL(cudaLaunchKernel((void*)kernel, nblks, nthrs, args, 0, stream));
+    FLASHINFER_CUDA_CALL(gpuLaunchKernel((void*)kernel, nblks, nthrs, args, 0, stream));
   });
-  return cudaSuccess;
+  return gpuSuccess;
 }
 
 /*!
@@ -374,18 +375,18 @@ cudaError_t AppendPagedKVCacheDecode(paged_kv_t<DType, IdType> paged_kv, DType* 
  * \return status Indicates whether CUDA calls are successful
  */
 template <typename DType, typename IdType>
-cudaError_t AppendPagedKVCache(paged_kv_t<DType, IdType> paged_kv, DType* append_key,
-                               DType* append_value, IdType* batch_indices, IdType* positions,
-                               uint32_t nnz, size_t append_k_stride_n, size_t append_k_stride_h,
-                               size_t append_v_stride_n, size_t append_v_stride_h,
-                               cudaStream_t stream = nullptr) {
+gpuError_t AppendPagedKVCache(paged_kv_t<DType, IdType> paged_kv, DType* append_key,
+                              DType* append_value, IdType* batch_indices, IdType* positions,
+                              uint32_t nnz, size_t append_k_stride_n, size_t append_k_stride_h,
+                              size_t append_v_stride_n, size_t append_v_stride_h,
+                              gpuStream_t stream = nullptr) {
   uint32_t head_dim = paged_kv.head_dim;
   uint32_t num_heads = paged_kv.num_heads;
   int dev_id = 0;
   int num_sms = 0;
   int num_blocks_per_sm = 0;
-  FLASHINFER_CUDA_CALL(cudaGetDevice(&dev_id));
-  FLASHINFER_CUDA_CALL(cudaDeviceGetAttribute(&num_sms, cudaDevAttrMultiProcessorCount, dev_id));
+  FLASHINFER_CUDA_CALL(gpuGetDevice(&dev_id));
+  FLASHINFER_CUDA_CALL(gpuDeviceGetAttribute(&num_sms, gpuDevAttrMultiProcessorCount, dev_id));
 
   DISPATCH_HEAD_DIM(head_dim, HEAD_DIM, {
     constexpr uint32_t vec_size = std::max(16 / sizeof(DType), HEAD_DIM / 32);
@@ -394,7 +395,7 @@ cudaError_t AppendPagedKVCache(paged_kv_t<DType, IdType> paged_kv, DType* append
     uint32_t num_threads = bdx * bdy;
     uint32_t smem_size = 0;
     auto kernel = AppendPagedKVCacheKernel<HEAD_DIM, vec_size, DType, IdType>;
-    FLASHINFER_CUDA_CALL(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks_per_sm, kernel,
+    FLASHINFER_CUDA_CALL(gpuOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks_per_sm, kernel,
                                                                        num_threads, smem_size));
     num_blocks_per_sm = min(num_blocks_per_sm, ceil_div(int(nnz), num_sms));
     dim3 nblks(num_blocks_per_sm * num_sms);
@@ -404,9 +405,9 @@ cudaError_t AppendPagedKVCache(paged_kv_t<DType, IdType> paged_kv, DType* append
                     (void*)&batch_indices,     (void*)&positions,         (void*)&nnz,
                     (void*)&append_k_stride_n, (void*)&append_k_stride_h, (void*)&append_v_stride_n,
                     (void*)&append_v_stride_h};
-    FLASHINFER_CUDA_CALL(cudaLaunchKernel((void*)kernel, nblks, nthrs, args, 0, stream));
+    FLASHINFER_CUDA_CALL(gpuLaunchKernel((void*)kernel, nblks, nthrs, args, 0, stream));
   });
-  return cudaSuccess;
+  return gpuSuccess;
 }
 
 template <typename DType, typename IdType>

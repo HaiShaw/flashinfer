@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import shutil
 
 import setuptools
 
@@ -73,6 +74,7 @@ def generate_build_meta(aot_build_meta: dict) -> None:
 
 
 def generate_cuda() -> None:
+    print("Calling generate_cuda()")
     try:  # no aot_build_utils in sdist
         sys.path.append(str(root))
         from aot_build_utils import generate_dispatch_inc
@@ -82,6 +84,7 @@ def generate_cuda() -> None:
         )
         from aot_build_utils.generate_sm90 import get_sm90_instantiation_cu
     except ImportError:
+        print("Import failed in the function generate_cuda(): ", e)
         return
 
     # dispatch.inc
@@ -143,6 +146,7 @@ if enable_aot:
     import torch
     import torch.utils.cpp_extension as torch_cpp_ext
     from packaging.version import Version
+    from flashinfer.utils import check_hip_availability, check_cuda_availability
 
     generate_cuda()
 
@@ -154,6 +158,21 @@ if enable_aot:
         txt = subprocess.check_output([nvcc, "--version"], text=True)
         return Version(re.findall(r"release (\d+\.\d+),", txt)[0])
 
+    def get_hip_version() -> Version:
+        if torch_cpp_ext.ROCM_VERSION is None:
+            hipcc_loc = shutil.which('hipcc')
+            if hipcc_loc is None:
+                # FIXME
+                hipcc_loc = torch_cpp_ext.ROCM_HOME + "/bin/hipcc"
+                # hipcc_loc = torch_cpp_ext.ROCM_HOME + "/hip/bin/hipcc"
+            # HIP version: 5.2.0
+            # Clang version: 13.0.0 (ROCm Clang 13.0.0)
+            # Build configuration: Release
+            txt = subprocess.check_output([hipcc_loc, "--version"], text=True)
+            return Version(re.findall(r"HIP version: (\d+\.\d+),", txt)[0])
+        else:
+            return Version(str(torch_cpp_ext.ROCM_VERSION[0]) + str(torch_cpp_ext.ROCM_VERSION[1]))
+
     class NinjaBuildExtension(torch_cpp_ext.BuildExtension):
         def __init__(self, *args, **kwargs) -> None:
             # do not override env MAX_JOBS if already exists
@@ -163,34 +182,65 @@ if enable_aot:
 
             super().__init__(*args, **kwargs)
 
-    # cuda arch check for fp8 at the moment.
-    for cuda_arch_flags in torch_cpp_ext._get_cuda_arch_flags():
-        arch = int(re.search(r"compute_(\d+)", cuda_arch_flags).group(1))
-        if arch < 75:
-            raise RuntimeError("FlashInfer requires sm75+")
-
-    cuda_version = get_cuda_version()
+    if check_hip_availability():
+        # TODO
+        # allowed_archs = ["native", "gfx90a", "gfx940", "gfx941", "gfx942"]
+        for rocm_arch_flags in torch_cpp_ext._get_rocm_arch_flags():
+            # arch = str(re.search(r"\-\-offload\-arch=(\w+)", rocm_arch_flags).group(1))
+            # if arch not in allowed_archs:
+                # raise RuntimeError("AMD ROCm archs mismatch")
+            pass
+        cuda_version = get_hip_version()
+    else:
+        # cuda arch check for fp8 at the moment.
+        for cuda_arch_flags in torch_cpp_ext._get_cuda_arch_flags():
+            arch = int(re.search(r"compute_(\d+)", cuda_arch_flags).group(1))
+            if arch < 75:
+                raise RuntimeError("FlashInfer requires sm75+")
+        cuda_version = get_cuda_version()
     torch_full_version = Version(torch.__version__)
     torch_version = f"{torch_full_version.major}.{torch_full_version.minor}"
     cmdclass["build_ext"] = NinjaBuildExtension
-    install_requires = [f"torch == {torch_version}.*"]
+    # install_requires = [f"torch == {torch_version}+rocm{str(torch_cpp_ext.ROCM_VERSION[0])}.{str(torch_cpp_ext.ROCM_VERSION[1])}"] if check_hip_availability() else [f"torch == {torch_version}"]
+    # Workaround for missed PyTorch for ROCm in FlashInfer's Wheel hub https://flashinfer.ai/whl/,
+    # where there are only PyTorch versions for CUDA platform.
+    install_requires = [] if check_hip_availability() else [f"torch == {torch_version}"]
 
     aot_build_meta = {}
     aot_build_meta["cuda_major"] = cuda_version.major
     aot_build_meta["cuda_minor"] = cuda_version.minor
     aot_build_meta["torch"] = torch_version
     aot_build_meta["python"] = platform.python_version()
-    aot_build_meta["TORCH_CUDA_ARCH_LIST"] = os.environ.get("TORCH_CUDA_ARCH_LIST")
+    if check_hip_availability():
+        aot_build_meta["PYTORCH_ROCM_ARCH"] = os.environ.get("PYTORCH_ROCM_ARCH")
+    else:
+        aot_build_meta["TORCH_CUDA_ARCH_LIST"] = os.environ.get("TORCH_CUDA_ARCH_LIST")
     generate_build_meta(aot_build_meta)
 
     if enable_f16:
         torch_cpp_ext.COMMON_NVCC_FLAGS.append("-DFLASHINFER_ENABLE_F16")
     if enable_bf16:
         torch_cpp_ext.COMMON_NVCC_FLAGS.append("-DFLASHINFER_ENABLE_BF16")
+        if check_cuda_availability():
+            torch_cpp_ext.COMMON_NVCC_FLAGS.append("-DFLASHINFER_ENABLE_BF16")
+        elif check_hip_availability():
+            # FIXME
+            torch_cpp_ext.COMMON_HIP_FLAGS.append("-DFLASHINFER_ENABLE_BF16")
+            torch_cpp_ext.COMMON_HIPCC_FLAGS.append("-DFLASHINFER_ENABLE_BF16")
     if enable_fp8_e4m3:
-        torch_cpp_ext.COMMON_NVCC_FLAGS.append("-DFLASHINFER_ENABLE_FP8_E4M3")
+        if check_cuda_availability():
+            torch_cpp_ext.COMMON_NVCC_FLAGS.append("-DFLASHINFER_ENABLE_FP8_E4M3")
+        elif check_hip_availability():
+            # FIXME
+            torch_cpp_ext.COMMON_HIP_FLAGS.append("-DFLASHINFER_ENABLE_FP8_E4M3")
+            torch_cpp_ext.COMMON_HIPCC_FLAGS.append("-DFLASHINFER_ENABLE_FP8_E4M3")
     if enable_fp8_e5m2:
-        torch_cpp_ext.COMMON_NVCC_FLAGS.append("-DFLASHINFER_ENABLE_FP8_E5M2")
+        if check_cuda_availability():
+            torch_cpp_ext.COMMON_NVCC_FLAGS.append("-DFLASHINFER_ENABLE_FP8_E5M2")
+        elif check_hip_availability():
+            # FIXME
+            torch_cpp_ext.COMMON_HIP_FLAGS.append("-DFLASHINFER_ENABLE_FP8_E5M2")
+            torch_cpp_ext.COMMON_HIPCC_FLAGS.append("-DFLASHINFER_ENABLE_FP8_E5M2")
 
     for flag in [
         "-D__CUDA_NO_HALF_OPERATORS__",
@@ -211,9 +261,13 @@ if enable_aot:
     ]
     cxx_flags = [
         "-O3",
-        "-Wno-switch-bool",
         "-DPy_LIMITED_API=0x03080000",
     ]
+    if check_hip_availability():
+        # FIXME
+        cxx_flags += ["-I/opt/rocm/include", "-D__HIP_PLATFORM_AMD__"]
+    else:
+        cxx_flags += ["-Wno-switch-bool"]
     nvcc_flags = [
         "-O3",
         "-std=c++17",
@@ -226,8 +280,19 @@ if enable_aot:
     libraries = [
         "cublas",
         "cublasLt",
-    ]
+    ] not check_hip_availability() else ["hipblas", "hipblaslt"]
     sm90a_flags = "-gencode arch=compute_90a,code=sm_90a".split()
+    # FIXME: ROCm/HIP compiler flags
+    hipcc_flags = [
+        "-O3",
+        "-std=c++17",
+        "--offload-arch=gfx942",
+        "-ffast-math",
+        "-I/opt/rocm/include",
+        "-L/opt/rocm/lib",
+        "-lamdhip64",
+        "-D__HIP_PLATFORM_AMD__",
+    ]
     kernel_sources = [
         "csrc/bmm_fp8.cu",
         "csrc/cascade.cu",
@@ -251,7 +316,8 @@ if enable_aot:
         "csrc/batch_prefill_sm90.cu",
         "csrc/flashinfer_ops_sm90.cu",
     ]
-    decode_sources = list(gen_dir.glob("*decode_head*.cu"))
+    # decode_sources = list(gen_dir.glob("*decode_head*.cu"))
+    decode_sources = list(gen_dir.glob("batch_*decode_head*.cu"))
     prefill_sources = [
         f for f in gen_dir.glob("*prefill_head*.cu") if "_sm90" not in f.name
     ]
@@ -259,12 +325,13 @@ if enable_aot:
     ext_modules = [
         torch_cpp_ext.CUDAExtension(
             name="flashinfer.flashinfer_kernels",
-            sources=kernel_sources + decode_sources + prefill_sources,
+            # sources=kernel_sources + decode_sources + prefill_sources,
+            sources=["csrc/batch_decode.cu"] + decode_sources,
             include_dirs=include_dirs,
             libraries=libraries,
             extra_compile_args={
                 "cxx": cxx_flags,
-                "nvcc": nvcc_flags,
+                "nvcc": hipcc_flags if check_hip_availability() else nvcc_flags,
             },
             py_limited_api=True,
         )

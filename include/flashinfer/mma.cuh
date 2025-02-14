@@ -16,10 +16,17 @@
 #ifndef FLASHINFER_MMA_CUH_
 #define FLASHINFER_MMA_CUH_
 
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#include <hip/hip_bf16.h>
+#include <hip/hip_fp16.h>
+#include <hip/hip_fp8.h>
+#include <hip/hip_runtime.h>
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
+#endif
 
 #include <type_traits>
 
@@ -52,6 +59,25 @@ namespace mma {
 #define FLASHINFER_RUNTIME_ASSERT(x) __brkpt()
 #else
 #define FLASHINFER_RUNTIME_ASSERT(x) assert(0 && x)
+#endif
+
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+/*
+Hacky workaround for the error below:
+  /home/git_repos/glen-amd/flashinfer/include/flashinfer/attention/../mma_hip.cuh:204:14: error: use of undeclared identifier '__shfl_sync'
+    204 |     word.x = __shfl_sync(0xffffffff, R[reg_id], (tx % 8) * 4);
+        |              ^
+  /home/git_repos/glen-amd/flashinfer/include/flashinfer/attention/../mma_hip.cuh:205:14: error: use of undeclared identifier '__shfl_sync'
+    205 |     word.y = __shfl_sync(0xffffffff, R[reg_id], (tx % 8) * 4 + 1);
+        |              ^
+  /home/git_repos/glen-amd/flashinfer/include/flashinfer/attention/../mma_hip.cuh:206:14: error: use of undeclared identifier '__shfl_sync'
+    206 |     word.z = __shfl_sync(0xffffffff, R[reg_id], (tx % 8) * 4 + 2);
+        |              ^
+  /home/git_repos/glen-amd/flashinfer/include/flashinfer/attention/../mma_hip.cuh:207:14: error: use of undeclared identifier '__shfl_sync'
+    207 |     word.w = __shfl_sync(0xffffffff, R[reg_id], (tx % 8) * 4 + 3);
+        |              ^
+*/
+// Borrowed from "hipamd/include/hip/amd_detail/amd_hip_bf16.h" in the clr Git repo
 #endif
 
 enum class MMAMode {
@@ -193,10 +219,17 @@ __device__ __forceinline__ void stmatrix_m8n8x4(uint32_t* R, T* smem_ptr) {
   uint4 word;
 #pragma unroll
   for (uint32_t reg_id = 0; reg_id < 4; ++reg_id) {
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+    word.x = __shfl(0xffffffff, R[reg_id], (tx % 8) * 4);
+    word.y = __shfl(0xffffffff, R[reg_id], (tx % 8) * 4 + 1);
+    word.z = __shfl(0xffffffff, R[reg_id], (tx % 8) * 4 + 2);
+    word.w = __shfl(0xffffffff, R[reg_id], (tx % 8) * 4 + 3);
+#else
     word.x = __shfl_sync(0xffffffff, R[reg_id], (tx % 8) * 4);
     word.y = __shfl_sync(0xffffffff, R[reg_id], (tx % 8) * 4 + 1);
     word.z = __shfl_sync(0xffffffff, R[reg_id], (tx % 8) * 4 + 2);
     word.w = __shfl_sync(0xffffffff, R[reg_id], (tx % 8) * 4 + 3);
+#endif
     if (tx / 8 == reg_id) {
       *(uint4*)smem_ptr = word;
     }

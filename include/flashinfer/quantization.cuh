@@ -15,10 +15,17 @@
  */
 #ifndef FLASHINFER_QUANTIZATION_CUH_
 #define FLASHINFER_QUANTIZATION_CUH_
+
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
+#include <hipcub/hipcub.hpp>
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 
 #include <cub/cub.cuh>
+#endif
 
 #include "utils.cuh"
 
@@ -82,30 +89,30 @@ __global__ void SegmentPackBitsKernel(bool* input, uint8_t* output, IdType* inpu
   }
 }
 
-cudaError_t PackBits(bool* input, uint8_t* output, int64_t num_elements, BitOrder bitorder,
-                     cudaStream_t stream) {
+gpuError_t PackBits(bool* input, uint8_t* output, int64_t num_elements, BitOrder bitorder,
+                    gpuStream_t stream) {
   DISPATCH_BITORDER(bitorder, BITORDER, {
     auto kernel = PackBitsKernel<BITORDER>;
     const dim3 nthrs(256);
     const dim3 nblks(ceil_div(num_elements, nthrs.x * 8));
     void* args[] = {&input, &output, &num_elements};
-    FLASHINFER_CUDA_CALL(cudaLaunchKernel((void*)kernel, nblks, nthrs, args, 0, stream));
+    FLASHINFER_CUDA_CALL(gpuLaunchKernel((void*)kernel, nblks, nthrs, args, 0, stream));
   });
-  return cudaSuccess;
+  return gpuSuccess;
 }
 
 template <typename IdType>
-cudaError_t SegmentPackBits(bool* input, uint8_t* output, IdType* input_indptr,
-                            IdType* output_indptr, uint32_t batch_size, BitOrder bitorder,
-                            cudaStream_t stream) {
+gpuError_t SegmentPackBits(bool* input, uint8_t* output, IdType* input_indptr,
+                           IdType* output_indptr, uint32_t batch_size, BitOrder bitorder,
+                           gpuStream_t stream) {
   DISPATCH_BITORDER(bitorder, BITORDER, {
     auto kernel = SegmentPackBitsKernel<BITORDER, IdType>;
     const dim3 nthrs(256);
     const dim3 nblks(batch_size);
     void* args[] = {&input, &output, &input_indptr, &output_indptr};
-    FLASHINFER_CUDA_CALL(cudaLaunchKernel((void*)kernel, nblks, nthrs, args, 0, stream));
+    FLASHINFER_CUDA_CALL(gpuLaunchKernel((void*)kernel, nblks, nthrs, args, 0, stream));
   });
-  return cudaSuccess;
+  return gpuSuccess;
 }
 
 }  // namespace quantization
