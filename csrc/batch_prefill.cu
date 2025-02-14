@@ -17,6 +17,7 @@
 #include <flashinfer/attention/prefill_params.cuh>
 #include <flashinfer/attention/scheduler.cuh>
 #include <flashinfer/attention/variants.cuh>
+#include <flashinfer/gpu_defines_cuda_hip.h>
 #include <optional>
 
 #include "aot_extension_utils.h"
@@ -27,13 +28,13 @@ template <uint32_t CTA_TILE_Q, uint32_t HEAD_DIM, PosEncodingMode POS_ENCODING_M
           bool ALLOW_FP16_QK_REDUCTION, MaskMode MASK_MODE, typename AttentionVariant>
 cudaError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::ParamsT params,
                                                    typename AttentionVariant::DTypeO* tmp_v,
-                                                   float* tmp_s, cudaStream_t stream);
+                                                   float* tmp_s, gpuStream_t stream);
 
 template <uint32_t CTA_TILE_Q, uint32_t HEAD_DIM, PosEncodingMode POS_ENCODING_MODE,
           bool ALLOW_FP16_QK_REDUCTION, MaskMode MASK_MODE, typename AttentionVariant>
 cudaError_t BatchPrefillWithRaggedKVCacheDispatched(typename AttentionVariant::ParamsT params,
                                                     typename AttentionVariant::DTypeO* tmp_v,
-                                                    float* tmp_s, cudaStream_t stream);
+                                                    float* tmp_s, gpuStream_t stream);
 
 }  // namespace flashinfer
 
@@ -54,7 +55,7 @@ std::vector<int64_t> BatchPrefillWithKVCachePlan(
 
   using IdType = int32_t;
 
-  cudaStream_t stream = reinterpret_cast<cudaStream_t>(cuda_stream);
+  gpuStream_t stream = reinterpret_cast<cudaStream_t>(cuda_stream);
   cudaError_t status = PrefillPlan<IdType>(
       float_workspace_buffer.data_ptr(), float_workspace_size_in_bytes,
       int_workspace_buffer.data_ptr(), page_locked_int_workspace_buffer.data_ptr(),

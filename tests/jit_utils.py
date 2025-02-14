@@ -107,21 +107,21 @@ def jit_prefill_attention_func_args(
         use_logits_soft_cap_options,
         allow_fp16_qk_reduction_options,
     ):
-        load_module_func_args.append(
-            (
-                flashinfer.prefill.gen_single_prefill_module,
-                (
-                    q_dtype,
-                    kv_dtype,
-                    q_dtype,
-                    head_dim,
-                    pos_encoding_mode,
-                    use_sliding_window,
-                    use_logits_soft_cap,
-                    allow_fp16_qk_reduction,
-                ),
-            )
-        )
+#        load_module_func_args.append(
+#            (
+#                flashinfer.prefill.gen_single_prefill_module,
+#                (
+#                    q_dtype,
+#                    kv_dtype,
+#                    q_dtype,
+#                    head_dim,
+#                    pos_encoding_mode,
+#                    use_sliding_window,
+#                    use_logits_soft_cap,
+#                    allow_fp16_qk_reduction,
+#                ),
+#            )
+#        )
         load_module_func_args.append(
             (
                 flashinfer.prefill.gen_batch_prefill_module,

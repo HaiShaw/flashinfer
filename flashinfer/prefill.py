@@ -24,12 +24,12 @@ import torch
 
 from .jit import (
     gen_batch_prefill_module,
-    gen_batch_prefill_sm90_module,
+#    gen_batch_prefill_sm90_module,
     gen_single_prefill_module,
-    gen_single_prefill_sm90_module,
-    get_batch_prefill_sm90_uri,
+#    gen_single_prefill_sm90_module,
+#    get_batch_prefill_sm90_uri,
     get_batch_prefill_uri,
-    get_single_prefill_sm90_uri,
+#    get_single_prefill_sm90_uri,
     get_single_prefill_uri,
     has_prebuilt_ops,
     load_cuda_ops,
@@ -721,7 +721,7 @@ def single_prefill_with_kv_cache(
     rope_scale: Optional[float] = None,
     rope_theta: Optional[float] = None,
     return_lse: bool = False,
-    backend: str = "auto",
+    backend: str = "fa2",
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     r"""Prefill/Append attention with KV cache for single request, return the attention
     output.
@@ -1045,7 +1045,7 @@ class BatchPrefillWithPagedKVCacheWrapper:
         paged_kv_last_page_len_buf: Optional[torch.Tensor] = None,
         custom_mask_buf: Optional[torch.Tensor] = None,
         qk_indptr_buf: Optional[torch.Tensor] = None,
-        backend: str = "auto",
+        backend: str = "fa2",
     ) -> None:
         r"""Constructor of :class:`BatchPrefillWithPagedKVCacheWrapper`.
 
@@ -1428,6 +1428,7 @@ class BatchPrefillWithPagedKVCacheWrapper:
         if self._backend == "fa2":
             self._cached_module = get_batch_prefill_module(*get_module_args)
             with self.device as device:
+                print(".")
                 self._plan_info = self._cached_module.plan(
                     self._float_workspace_buffer,
                     self._int_workspace_buffer,
@@ -1815,7 +1816,7 @@ class BatchPrefillWithRaggedKVCacheWrapper:
         kv_indptr_buf: Optional[torch.Tensor] = None,
         custom_mask_buf: Optional[torch.Tensor] = None,
         qk_indptr_buf: Optional[torch.Tensor] = None,
-        backend: str = "auto",
+        backend: str = "fa2",
     ) -> None:
         r"""Constructor of :class:`BatchPrefillWithRaggedKVCacheWrapper`.
 

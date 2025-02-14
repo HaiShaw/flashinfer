@@ -281,7 +281,7 @@ __forceinline__ __device__ __host__ T1 ceil_div(const T1 x, const T2 y) {
 
 inline std::pair<int, int> GetCudaComputeCapability() {
   int device_id = 0;
-  gpuGetDevice(&device_id);
+  gpuError_t result = gpuGetDevice(&device_id);
   int major = 0, minor = 0;
   gpuDeviceGetAttribute(&major, gpuDevAttrComputeCapabilityMajor, device_id);
   gpuDeviceGetAttribute(&minor, gpuDevAttrComputeCapabilityMinor, device_id);

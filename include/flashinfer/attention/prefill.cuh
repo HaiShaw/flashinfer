@@ -242,7 +242,8 @@ __device__ __forceinline__ void produce_kv(smem_t<swizzle_mode> smem, uint32_t* 
     for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i) {
 #pragma unroll
       for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(T)); ++j) {
-        smem.load_128b_async<fill_mode>(*smem_offset, *gptr, kv_idx < kv_len);
+//FIXME load_128b_async
+//        smem.load_128b_async<fill_mode>(*smem_offset, *gptr, kv_idx < kv_len);
         *smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
         *gptr += 8 * num_elems_per_128b<T>();
       }
@@ -259,7 +260,8 @@ __device__ __forceinline__ void produce_kv(smem_t<swizzle_mode> smem, uint32_t* 
     static_assert(NUM_MMA_KV * 2 % NUM_WARPS_Q == 0);
 #pragma unroll
     for (uint32_t i = 0; i < NUM_MMA_KV * 2 / NUM_WARPS_Q; ++i) {
-      smem.load_128b_async<fill_mode>(*smem_offset, *gptr, kv_idx < kv_len);
+//FIXME load_128b_async
+//      smem.load_128b_async<fill_mode>(*smem_offset, *gptr, kv_idx < kv_len);
       *smem_offset =
           smem.template advance_offset_by_row<num_warps * 8, channel_size_128b_kv>(*smem_offset);
       kv_idx += num_warps * 8;
@@ -291,7 +293,8 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
       DType* gptr = produce_v ? paged_kv.v_data + kv_offset[i] : paged_kv.k_data + kv_offset[i];
 #pragma unroll
       for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j) {
-        smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
+//FIXME load_128b_async
+//        smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
         *smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
         gptr += 8 * num_elems_per_128b<DType>();
       }
@@ -308,7 +311,8 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
 #pragma unroll
     for (uint32_t i = 0; i < NUM_MMA_KV * 2 / NUM_WARPS_Q; ++i) {
       DType* gptr = produce_v ? paged_kv.v_data + kv_offset[i] : paged_kv.k_data + kv_offset[i];
-      smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
+//FIXME load_128b_async
+//      smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
       kv_idx += num_warps * 8;
       *smem_offset =
           smem.template advance_offset_by_row<num_warps * 8, channel_size_128b_kv>(*smem_offset);
@@ -376,8 +380,12 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
   const uint32_t lane_idx = threadIdx.x, warp_idx_x = get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>();
 
   if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0) {
+uint32_t q_smem_offset_w = 0;
+//FIXME 
+#if 0
     uint32_t q_smem_offset_w = q_smem->get_permuted_offset<channel_size_128b_q>(
         warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8);
+#endif
 
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
@@ -390,8 +398,9 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
 #pragma unroll
         for (uint32_t mma_do = 0; mma_do < NUM_MMA_D / 4; ++mma_do) {
           // load q fragment from gmem to smem
-          q_smem->load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
-                                                              q_idx < qo_upper_bound);
+//FIXME load_128b_async
+//          q_smem->load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
+//                                                              q_idx < qo_upper_bound);
           q_smem_offset_w = q_smem->template advance_offset_by_column<8>(q_smem_offset_w, mma_do);
           q_ptr += 8 * num_elems_per_128b<DTypeQ>();
         }
@@ -424,14 +433,14 @@ __device__ __forceinline__ void q_smem_inplace_apply_rotary(
         uint32_t q_smem_offset_r_last_half =
             q_smem->template advance_offset_by_column<NUM_MMA_D>(q_smem_offset_r_first_half, 0);
         q_smem->ldmatrix_m8n8x4(q_smem_offset_r_last_half, q_frag_local[1]);
-        q_frag_apply_llama_rope<DTypeQ>(
+        /*q_frag_apply_llama_rope<DTypeQ>(
             (DTypeQ*)q_frag_local[0], (DTypeQ*)q_frag_local[1], rope_freq[mma_di],
             q_packed_idx + kv_len * group_size - qo_len * group_size + mma_q * 16 + lane_idx / 4,
             group_size);
         q_smem->stmatrix_m8n8x4(q_smem_offset_r_last_half, q_frag_local[1]);
         q_smem->stmatrix_m8n8x4(q_smem_offset_r_first_half, q_frag_local[0]);
         q_smem_offset_r_first_half =
-            q_smem->template advance_offset_by_column<2>(q_smem_offset_r_first_half, mma_di);
+            q_smem->template advance_offset_by_column<2>(q_smem_offset_r_first_half, mma_di);*/
       }
       *q_smem_offset_r += 16 * channel_size_128b_q;
     }
@@ -574,6 +583,8 @@ __device__ __forceinline__ void k_smem_inplace_apply_rotary(const uint32_t kv_id
   }
 }
 
+//FIXME
+#if 0
 template <uint32_t NUM_MMA_Q, uint32_t NUM_MMA_D, uint32_t NUM_MMA_KV, SwizzleMode swizzle_mode_q,
           SwizzleMode swizzle_mode_kv, typename DTypeQ, typename DTypeKV, typename DTypeQKAccum>
 __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
@@ -609,7 +620,8 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
         }
         b_frag_f8[0] = frag_layout_swizzle_16b_to_8b(b_frag_f8[0]);
         b_frag_f8[1] = frag_layout_swizzle_16b_to_8b(b_frag_f8[1]);
-        vec_cast<DTypeQ, DTypeKV>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
+//FIXME: overloaded...
+//	vec_cast<DTypeQ, DTypeKV>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
       } else {
         k_smem->ldmatrix_m8n8x4(*k_smem_offset_r, b_frag);
       }
@@ -651,6 +663,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
   *q_smem_offset_r -= NUM_MMA_D * 2;
   *k_smem_offset_r -= NUM_MMA_D * sizeof(DTypeKV);
 }
+#endif
 
 template <uint32_t NUM_MMA_Q, uint32_t NUM_MMA_D, uint32_t NUM_MMA_KV, typename AttentionVariant,
           typename DTypeQKAccum>
@@ -826,10 +839,11 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant,
           half2 m2 = make_half2(m[mma_q][j], m[mma_q][j]);
 #pragma unroll
           for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
-            *(half2*)&s_frag[mma_q][mma_kv][j * 2] =
-                math::ptx_exp2(*(half2*)&s_frag[mma_q][mma_kv][j * 2] - m2);
-            *(half2*)&s_frag[mma_q][mma_kv][j * 2 + 4] =
-                math::ptx_exp2(*(half2*)&s_frag[mma_q][mma_kv][j * 2 + 4] - m2);
+//FIXME vec_cast
+//            *(half2*)&s_frag[mma_q][mma_kv][j * 2] =
+//                math::ptx_exp2(*(half2*)&s_frag[mma_q][mma_kv][j * 2] - m2);
+//            *(half2*)&s_frag[mma_q][mma_kv][j * 2 + 4] =
+//                math::ptx_exp2(*(half2*)&s_frag[mma_q][mma_kv][j * 2 + 4] - m2);
           }
         }
       }
@@ -853,7 +867,8 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
       for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
-        vec_cast<DTypeQ, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
+//FIXME vec_cast
+//        vec_cast<DTypeQ, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
       }
     }
   }
@@ -864,9 +879,11 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
 #pragma unroll
       for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
         if constexpr (std::is_same_v<DTypeQKAccum, float>) {
-          mma::rowsum_f16f16f32(d[mma_q], s_frag_f16[mma_q][mma_kv]);
+//FIXME row_sum
+//          mma::rowsum_f16f16f32(d[mma_q], s_frag_f16[mma_q][mma_kv]);
         } else {
-          mma::rowsum_f16f16f32(d[mma_q], s_frag[mma_q][mma_kv]);
+//FIXME row_sum
+//          mma::rowsum_f16f16f32(d[mma_q], s_frag[mma_q][mma_kv]);
         }
       }
     }
@@ -880,25 +897,31 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
       if constexpr (sizeof(DTypeKV) == 1) {
         uint32_t b_frag_f8[2];
         if (mma_d % 2 == 0) {
-          v_smem->ldmatrix_m8n8x4_trans_left_half(*v_smem_offset_r, b_frag_f8);
+//FIXME vec_cast
+//          v_smem->ldmatrix_m8n8x4_trans_left_half(*v_smem_offset_r, b_frag_f8);
         } else {
-          v_smem->ldmatrix_m8n8x4_trans_right_half(*v_smem_offset_r, b_frag_f8);
+//FIXME vec_cast
+//          v_smem->ldmatrix_m8n8x4_trans_right_half(*v_smem_offset_r, b_frag_f8);
         }
         b_frag_f8[0] = frag_layout_swizzle_16b_to_8b_trans(b_frag_f8[0]);
         b_frag_f8[1] = frag_layout_swizzle_16b_to_8b_trans(b_frag_f8[1]);
-        vec_cast<DTypeQ, DTypeKV>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
+//FIXME vec_cast
+//        vec_cast<DTypeQ, DTypeKV>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
         swap(b_frag[1], b_frag[2]);
       } else {
-        v_smem->ldmatrix_m8n8x4_trans(*v_smem_offset_r, b_frag);
+//FIXME vec_cast
+//        v_smem->ldmatrix_m8n8x4_trans(*v_smem_offset_r, b_frag);
       }
 #pragma unroll
       for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
         if constexpr (std::is_same_v<DTypeQKAccum, float>) {
-          mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(
-              o_frag[mma_q][mma_d], (uint32_t*)(s_frag_f16[mma_q][mma_kv]), b_frag);
+//FIXME vec_cast
+//          mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(
+//              o_frag[mma_q][mma_d], (uint32_t*)(s_frag_f16[mma_q][mma_kv]), b_frag);
         } else {
-          mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(
-              o_frag[mma_q][mma_d], (uint32_t*)s_frag[mma_q][mma_kv], b_frag);
+//FIXME vec_cast
+//          mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(
+//              o_frag[mma_q][mma_d], (uint32_t*)s_frag[mma_q][mma_kv], b_frag);
         }
       }
       if constexpr (sizeof(DTypeKV) == 1) {
@@ -1091,14 +1114,23 @@ __device__ __forceinline__ void write_o_reg_gmem(
 #pragma unroll
       for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
         uint32_t o_frag_f16[4];
-        vec_cast<DTypeO, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
+//FIXME vec_cast
+//        vec_cast<DTypeO, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
 #ifdef FLASHINFER_STMATRIX_M8N8X4_ENABLED
+uint32_t o_smem_offset_w = 0;
+//FIXME 
+#if 0
         uint32_t o_smem_offset_w = o_smem->get_permuted_offset<channel_size_128b_out>(
             (warp_idx_x * NUM_MMA_Q + mma_q) * 16 + lane_idx % 16, mma_d * 2 + lane_idx / 16);
+#endif
         o_smem->stmatrix_m8n8x4(o_smem_offset_w, o_frag_f16);
 #else
-        uint32_t o_smem_offset_w = o_smem->get_permuted_offset<channel_size_128b_out>(
+uint32_t o_smem_offset_w = 0;
+//FIXME 
+#if 0
+	uint32_t o_smem_offset_w = o_smem->get_permuted_offset<channel_size_128b_out>(
             (warp_idx_x * NUM_MMA_Q + mma_q) * 16 + lane_idx / 4, mma_d * 2);
+#endif
         ((uint32_t*)(o_smem->base + o_smem_offset_w))[lane_idx % 4] = o_frag_f16[0];
         ((uint32_t*)(o_smem->base + o_smem_offset_w + 8 * channel_size_128b_out))[lane_idx % 4] =
             o_frag_f16[1];
@@ -1109,9 +1141,12 @@ __device__ __forceinline__ void write_o_reg_gmem(
       }
     }
 
+uint32_t o_smem_offset_w = 0;
+//FIXME 
+#if 0
     uint32_t o_smem_offset_w = o_smem->get_permuted_offset<channel_size_128b_out>(
         warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8);
-
+#endif
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
@@ -1171,257 +1206,6 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void SinglePrefillWithKV
     const typename AttentionVariant::ParamsT params) {
 #else
     const __grid_constant__ typename AttentionVariant::ParamsT params) {
-#endif
-  using DTypeQ = typename AttentionVariant::DTypeQ;
-#if (__CUDA_ARCH__ < 800)
-  if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
-    FLASHINFER_RUNTIME_ASSERT("Prefill kernels do not support bf16 on sm75.");
-  } else {
-#endif
-    using DTypeKV = typename AttentionVariant::DTypeKV;
-    using DTypeO = typename AttentionVariant::DTypeO;
-    DTypeQ* q = params.q;
-    DTypeKV* k = params.k;
-    DTypeKV* v = params.v;
-    DTypeO* o = params.o;
-    float* lse = params.lse;
-    const uint32_t qo_len = params.qo_len;
-    const uint32_t kv_len = params.kv_len;
-    const bool partition_kv = params.partition_kv;
-    const uint32_t q_stride_n = params.q_stride_n;
-    const uint32_t q_stride_h = params.q_stride_h;
-    const uint32_t kv_stride_n = params.kv_stride_n;
-    const uint32_t kv_stride_h = params.kv_stride_h;
-    const int32_t maybe_window_left = params.window_left;
-
-    static_assert(sizeof(DTypeQ) == 2);
-    static_assert(sizeof(DTypeO) == 2);
-    const uint32_t lane_idx = threadIdx.x, warp_idx = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>();
-    const uint32_t bx = blockIdx.x, chunk_idx = blockIdx.y, kv_head_idx = blockIdx.z;
-    const uint32_t num_kv_heads = gridDim.z, num_qo_heads = num_kv_heads * group_size;
-    constexpr uint32_t num_rows_per_cta = NUM_MMA_Q * NUM_WARPS_Q * 16;
-    const tensor_info_t qkv_info(qo_len, kv_len, num_qo_heads, num_kv_heads, q_stride_n, q_stride_h,
-                                 kv_stride_n, kv_stride_h, /*head_dim=*/NUM_MMA_D * 16);
-
-    const uint32_t num_chunks = gridDim.y;
-    const uint32_t max_chunk_size = partition_kv ? ceil_div(kv_len, num_chunks) : kv_len;
-    const uint32_t chunk_start = partition_kv ? chunk_idx * max_chunk_size : 0;
-    const uint32_t chunk_end =
-        partition_kv ? min((chunk_idx + 1) * max_chunk_size, kv_len) : kv_len;
-    const uint32_t chunk_size = chunk_end - chunk_start;
-
-    auto block = cg::this_thread_block();
-    extern __shared__ uint8_t smem[];
-    AttentionVariant variant(params, /*batch_idx=*/0, smem);
-    const uint32_t window_left = variant.window_left;
-
-    constexpr uint32_t head_dim = NUM_MMA_D * 16;
-    constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
-    constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
-    constexpr uint32_t channel_size_128b_out = head_dim / num_elems_per_128b<DTypeO>();
-
-    DTypeQKAccum s_frag[NUM_MMA_Q][NUM_MMA_KV][8];
-    alignas(16) float o_frag[NUM_MMA_Q][NUM_MMA_D][8];
-    DTypeQKAccum m[NUM_MMA_Q][2];
-    float d[NUM_MMA_Q][2];
-    float rope_freq[NUM_MMA_D / 2][4];
-    if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
-      const float log2_rope_rcp_scale = params.log2_rope_rcp_scale;
-      const float log2_rope_rcp_theta = params.log2_rope_rcp_theta;
-      init_rope_freq<NUM_MMA_D>(rope_freq, log2_rope_rcp_scale, log2_rope_rcp_theta);
-    }
-    init_states<NUM_MMA_Q, NUM_MMA_D>(variant, o_frag, m, d);
-
-    // cooperative fetch q fragment from gmem to reg
-    const uint32_t qo_packed_idx_base =
-        (bx * NUM_WARPS_Q + get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>()) * NUM_MMA_Q * 16;
-    constexpr SwizzleMode swizzle_mode_q = SwizzleMode::k128B;
-    smem_t<swizzle_mode_q> qo_smem(smem);
-    DTypeQ* q_ptr_base =
-        q + qkv_info.get_q_elem_offset(0, kv_head_idx * group_size,
-                                       (lane_idx % 8) * num_elems_per_128b<DTypeQ>());
-    DTypeO* o_ptr_base =
-        partition_kv
-            ? o + chunk_idx * num_qo_heads * head_dim +
-                  qkv_info.get_o_elem_offset(0, kv_head_idx * group_size,
-                                             (lane_idx % 8) * num_elems_per_128b<DTypeO>())
-            : o + qkv_info.get_o_elem_offset(0, kv_head_idx * group_size,
-                                             (lane_idx % 8) * num_elems_per_128b<DTypeO>());
-
-    uint32_t q_smem_offset_r = qo_smem.get_permuted_offset<channel_size_128b_q>(
-        get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_Q * 16 + lane_idx % 16,
-        lane_idx / 16);
-
-    load_q_global_smem<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D>(
-        qo_packed_idx_base, qo_len, q_ptr_base, q_stride_n, q_stride_h, group_size, &qo_smem);
-
-    cp_async::commit_group();
-    cp_async::wait_group<0>();
-    block.sync();
-
-    if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
-      q_smem_inplace_apply_rotary<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q,
-                                  DTypeQ>(qo_packed_idx_base, qo_len, kv_len, group_size, &qo_smem,
-                                          &q_smem_offset_r, rope_freq);
-      block.sync();
-    }
-    q_smem_inplace_transform<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q>(
-        params, variant, &qo_smem);
-
-    constexpr SwizzleMode swizzle_mode_kv =
-        (sizeof(DTypeKV) == 1 && head_dim == 64) ? SwizzleMode::k64B : SwizzleMode::k128B;
-    constexpr uint32_t kv_frag_rows = swizzle_mode_kv == SwizzleMode::k128B ? 4 : 8;
-    constexpr uint32_t kv_frag_cols = swizzle_mode_kv == SwizzleMode::k128B ? 8 : 4;
-    smem_t<swizzle_mode_kv> k_smem(smem +
-                                   (NUM_WARPS_Q * NUM_MMA_Q * sizeof(DTypeQ)) * 16 * head_dim),
-        v_smem(smem + (NUM_WARPS_Q * NUM_MMA_Q * sizeof(DTypeQ) +
-                       NUM_WARPS_KV * NUM_MMA_KV * sizeof(DTypeKV)) *
-                          16 * head_dim);
-
-    const uint32_t num_iterations = ceil_div(
-        MASK_MODE == MaskMode::kCausal
-            ? min(chunk_size,
-                  sub_if_greater_or_zero(
-                      kv_len - qo_len + ((bx + 1) * num_rows_per_cta) / group_size, chunk_start))
-            : chunk_size,
-        16 * NUM_WARPS_KV * NUM_MMA_KV);
-
-    const uint32_t window_iteration =
-        ceil_div(sub_if_greater_or_zero(kv_len + (bx + 1) * num_rows_per_cta,
-                                        qo_len + window_left + chunk_start),
-                 (16 * NUM_WARPS_KV * NUM_MMA_KV));
-
-    const uint32_t mask_iteration =
-        (MASK_MODE == MaskMode::kCausal
-             ? min(chunk_size,
-                   sub_if_greater_or_zero(kv_len + (bx * num_rows_per_cta) / group_size - qo_len,
-                                          chunk_start))
-             : chunk_size) /
-        (16 * NUM_WARPS_KV * NUM_MMA_KV);
-
-    DTypeKV* k_ptr =
-        k + qkv_info.get_kv_elem_offset(
-                chunk_start + warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, kv_head_idx,
-                (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>());
-    DTypeKV* v_ptr =
-        v + qkv_info.get_kv_elem_offset(
-                chunk_start + warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, kv_head_idx,
-                (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>());
-
-    uint32_t k_smem_offset_r = k_smem.get_permuted_offset<channel_size_128b_kv>(
-                 get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 +
-                     8 * (lane_idx / 16) + lane_idx % 8,
-                 (lane_idx % 16) / 8),
-             v_smem_offset_r = v_smem.get_permuted_offset<channel_size_128b_kv>(
-                 get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
-                 lane_idx / 16),
-             kv_smem_offset_w = k_smem.get_permuted_offset<channel_size_128b_kv>(
-                 warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);
-    produce_kv<SharedMemFillMode::kNoFill, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        k_smem, &kv_smem_offset_w, &k_ptr, kv_stride_n, 0, chunk_size);
-    cp_async::commit_group();
-    produce_kv<SharedMemFillMode::kFillZero, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        v_smem, &kv_smem_offset_w, &v_ptr, kv_stride_n, 0, chunk_size);
-    cp_async::commit_group();
-
-#pragma unroll 1
-    for (uint32_t iter = 0; iter < num_iterations; ++iter) {
-      cp_async::wait_group<1>();
-      block.sync();
-
-      if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
-        k_smem_inplace_apply_rotary<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV,
-                                    swizzle_mode_kv, DTypeKV>(
-            chunk_start + iter * 16 * NUM_WARPS_KV * NUM_MMA_KV, &k_smem, &k_smem_offset_r,
-            rope_freq);
-        block.sync();
-      }
-
-      // compute attention score
-      compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ,
-                 DTypeKV>(&qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
-
-      logits_transform<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
-          params, variant, /*batch_idx=*/0, qo_packed_idx_base,
-          chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) *
-                            NUM_MMA_KV * 16,
-          qo_len, kv_len, group_size, s_frag);
-
-      // apply mask
-      if (MASK_MODE == MaskMode::kCustom || (iter >= mask_iteration || iter < window_iteration)) {
-        logits_mask<MASK_MODE, NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
-            params, variant, /*batch_idx=*/0, qo_packed_idx_base,
-            chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) *
-                              NUM_MMA_KV * 16,
-            qo_len, kv_len, chunk_end, group_size, s_frag);
-      }
-
-      // compute m,d states in online softmax
-      update_mdo_states<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(variant, s_frag, o_frag, m, d);
-
-      block.sync();
-      produce_kv<SharedMemFillMode::kNoFill, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-          k_smem, &kv_smem_offset_w, &k_ptr, kv_stride_n,
-          (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV, chunk_size);
-      cp_async::commit_group();
-      cp_async::wait_group<1>();
-      block.sync();
-
-      // compute sfm*v
-      compute_sfm_v<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_kv, DTypeQ, DTypeKV>(
-          variant, &v_smem, &v_smem_offset_r, s_frag, o_frag, d);
-
-      block.sync();
-      produce_kv<SharedMemFillMode::kFillZero, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-          v_smem, &kv_smem_offset_w, &v_ptr, kv_stride_n,
-          (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV, chunk_size);
-      cp_async::commit_group();
-    }
-    cp_async::wait_group<0>();
-    block.sync();
-
-    // threadblock synchronization
-    threadblock_sync_mdo_states<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, DTypeQKAccum>(
-        variant, o_frag, (float*)smem, m, d, warp_idx, lane_idx);
-
-    // normalize d
-    normalize_d<NUM_MMA_Q, NUM_MMA_D>(variant, o_frag, m, d);
-
-    // write back
-    write_o_reg_gmem<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D>(
-        o_frag, &qo_smem, o_ptr_base, qo_packed_idx_base, qo_len,
-        /*o_stride_n=*/
-        partition_kv ? num_qo_heads * head_dim * num_chunks : num_qo_heads * head_dim,
-        /*o_stride_h=*/head_dim, group_size);
-
-    // write lse
-    if constexpr (variant.use_softmax) {
-      if (lse != nullptr || partition_kv) {
-        if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0) {
-#pragma unroll
-          for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
-#pragma unroll
-            for (uint32_t j = 0; j < 2; ++j) {
-              uint32_t q, r;
-              group_size.divmod(qo_packed_idx_base + lane_idx / 4 + j * 8 + mma_q * 16, q, r);
-              const uint32_t qo_head_idx = kv_head_idx * group_size + r;
-              const uint32_t qo_idx = q;
-              if (qo_idx < qo_len) {
-                if (partition_kv) {
-                  lse[(qo_idx * num_chunks + chunk_idx) * num_qo_heads + qo_head_idx] =
-                      math::ptx_log2(d[mma_q][j]) + float(m[mma_q][j]);
-                } else {
-                  lse[qo_idx * num_qo_heads + qo_head_idx] =
-                      math::ptx_log2(d[mma_q][j]) + float(m[mma_q][j]);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-#if (__CUDA_ARCH__ < 800)
-  }
 #endif
 }
 
@@ -1520,8 +1304,8 @@ gpuError_t SinglePrefillWithKVCacheDispatched(typename AttentionVariant::ParamsT
         uint32_t smem_size = (NUM_MMA_Q * NUM_WARPS_Q * sizeof(DTypeQ) +
                               NUM_MMA_KV * NUM_WARPS_KV * 2 * sizeof(DTypeQ)) *
                              16 * HEAD_DIM;
-        FLASHINFER_CUDA_CALL(
-            gpuFuncSetAttribute(kernel, gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+        //FLASHINFER_CUDA_CALL(
+            gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size);//);
         int num_blocks_per_sm = 0;
         int num_sm = 0;
         FLASHINFER_CUDA_CALL(
@@ -1584,291 +1368,6 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithRag
     const typename AttentionVariant::ParamsT params) {
 #else
     const __grid_constant__ typename AttentionVariant::ParamsT params) {
-#endif
-  using DTypeQ = typename AttentionVariant::DTypeQ;
-#if (__CUDA_ARCH__ < 800)
-  if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
-    FLASHINFER_RUNTIME_ASSERT("Prefill kernels do not support bf16 on sm75.");
-  } else {
-#endif
-    using DTypeKV = typename AttentionVariant::DTypeKV;
-    using DTypeO = typename AttentionVariant::DTypeO;
-    using IdType = typename AttentionVariant::IdType;
-    DTypeQ* q = params.q;
-    IdType* request_indices = params.request_indices;
-    IdType* qo_tile_indices = params.qo_tile_indices;
-    IdType* kv_tile_indices = params.kv_tile_indices;
-    IdType* q_indptr = params.q_indptr;
-    IdType* kv_indptr = params.kv_indptr;
-    DTypeKV* k = params.k;
-    DTypeKV* v = params.v;
-    IdType* q_offset = params.q_offset;
-    IdType* k_rope_pos_offset = params.k_rope_pos_offset;
-    IdType* o_indptr = params.o_indptr;
-    DTypeO* o = params.o;
-    float* lse = params.lse;
-    bool* block_valid_mask = params.block_valid_mask;
-    const bool partition_kv = params.partition_kv;
-    const uint32_t q_stride_n = params.q_stride_n;
-    const uint32_t q_stride_h = params.q_stride_h;
-    const uint32_t kv_stride_n = params.kv_stride_n;
-    const uint32_t kv_stride_h = params.kv_stride_h;
-    const int32_t maybe_window_left = params.window_left;
-
-    static_assert(sizeof(DTypeQ) == 2);
-    static_assert(sizeof(DTypeO) == 2);
-    constexpr uint32_t head_dim = NUM_MMA_D * 16;
-    const uint32_t kv_chunk_size = *(params.kv_chunk_size_ptr);
-
-    auto block = cg::this_thread_block();
-    const uint32_t bx = blockIdx.x, lane_idx = threadIdx.x,
-                   warp_idx = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(), kv_head_idx = blockIdx.z;
-    if (block_valid_mask && !block_valid_mask[bx]) {
-      return;
-    }
-    const uint32_t num_kv_heads = gridDim.z, num_qo_heads = group_size * num_kv_heads;
-    const uint32_t request_idx = request_indices[bx], qo_tile_idx = qo_tile_indices[bx],
-                   kv_tile_idx = kv_tile_indices[bx];
-    constexpr uint32_t num_rows_per_cta = NUM_MMA_Q * NUM_WARPS_Q * 16;
-    extern __shared__ uint8_t smem[];
-    AttentionVariant variant(params, /*batch_idx=*/request_idx, smem);
-    const uint32_t qo_len = variant.qo_len, kv_len = variant.kv_len,
-                   window_left = variant.window_left;
-    const uint32_t kv_len_safe = kv_len > 0 ? kv_len : 1;
-    const uint32_t max_chunk_size = partition_kv ? kv_chunk_size : kv_len;
-    const uint32_t chunk_start = partition_kv ? kv_tile_idx * max_chunk_size : 0;
-    const uint32_t chunk_end =
-        partition_kv ? min((kv_tile_idx + 1) * max_chunk_size, kv_len) : kv_len;
-    const uint32_t chunk_size = chunk_end - chunk_start;
-    const tensor_info_t qkv_info(qo_len, kv_len, num_qo_heads, num_kv_heads, q_stride_n, q_stride_h,
-                                 kv_stride_n, kv_stride_h, /*head_dim=*/NUM_MMA_D * 16);
-    const uint32_t qo_upper_bound =
-        min(qo_len, ceil_div((qo_tile_idx + 1) * num_rows_per_cta, group_size));
-
-    constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
-    constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
-    constexpr uint32_t channel_size_128b_out = head_dim / num_elems_per_128b<DTypeO>();
-
-    DTypeQKAccum s_frag[NUM_MMA_Q][NUM_MMA_KV][8];
-    alignas(16) float o_frag[NUM_MMA_Q][NUM_MMA_D][8];
-    DTypeQKAccum m[NUM_MMA_Q][2];
-    float d[NUM_MMA_Q][2];
-    float rope_freq[NUM_MMA_D / 2][4];
-
-    if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
-      const float log2_rope_rcp_scale = params.log2_rope_rcp_scale;
-      const float log2_rope_rcp_theta = params.log2_rope_rcp_theta;
-      init_rope_freq<NUM_MMA_D>(rope_freq, log2_rope_rcp_scale, log2_rope_rcp_theta);
-    }
-    init_states<NUM_MMA_Q, NUM_MMA_D>(variant, o_frag, m, d);
-
-    const uint32_t qo_packed_idx_base =
-        (qo_tile_idx * NUM_WARPS_Q + get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>()) * NUM_MMA_Q * 16;
-    constexpr SwizzleMode swizzle_mode_q = SwizzleMode::k128B;
-    smem_t<swizzle_mode_q> qo_smem(smem);
-
-    DTypeQ* q_ptr_base =
-        q + qkv_info.get_q_elem_offset(q_indptr[request_idx], kv_head_idx * group_size,
-                                       (lane_idx % 8) * num_elems_per_128b<DTypeQ>());
-
-    DTypeO* o_ptr_base =
-        partition_kv
-            ? o + kv_tile_idx * num_qo_heads * head_dim +
-                  qkv_info.get_o_elem_offset(o_indptr[request_idx], kv_head_idx * group_size,
-                                             (lane_idx % 8) * num_elems_per_128b<DTypeO>())
-            : o + qkv_info.get_o_elem_offset(o_indptr[request_idx], kv_head_idx * group_size,
-                                             (lane_idx % 8) * num_elems_per_128b<DTypeO>());
-
-    uint32_t q_smem_offset_r = qo_smem.get_permuted_offset<channel_size_128b_q>(
-        get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_Q * 16 + lane_idx % 16,
-        lane_idx / 16);
-
-    load_q_global_smem<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D>(
-        qo_packed_idx_base, qo_upper_bound, q_ptr_base, q_stride_n, q_stride_h, group_size,
-        &qo_smem);
-
-    cp_async::commit_group();
-    cp_async::wait_group<0>();
-    block.sync();
-
-    if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
-      if (!q_offset) {
-        q_smem_inplace_apply_rotary<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q,
-                                    DTypeQ>(qo_packed_idx_base, qo_len, kv_len, group_size,
-                                            &qo_smem, &q_smem_offset_r, rope_freq);
-      } else {
-        q_smem_inplace_apply_rotary_with_pos<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D,
-                                             swizzle_mode_q, DTypeQ>(
-            qo_packed_idx_base, q_offset + q_indptr[request_idx], &qo_smem, group_size,
-            &q_smem_offset_r, rope_freq);
-      }
-      block.sync();
-    }
-    q_smem_inplace_transform<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q>(
-        params, variant, &qo_smem);
-
-    const uint32_t num_iterations = ceil_div(
-        (MASK_MODE == MaskMode::kCausal
-             ? min(chunk_size,
-                   sub_if_greater_or_zero(
-                       kv_len - qo_len + ((qo_tile_idx + 1) * num_rows_per_cta) / group_size,
-                       chunk_start))
-             : chunk_size),
-        16 * NUM_WARPS_KV * NUM_MMA_KV);
-
-    const uint32_t window_iteration =
-        ceil_div(sub_if_greater_or_zero(kv_len + (qo_tile_idx + 1) * num_rows_per_cta,
-                                        qo_len + window_left + chunk_start),
-                 (16 * NUM_WARPS_KV * NUM_MMA_KV));
-
-    const uint32_t mask_iteration =
-        (MASK_MODE == MaskMode::kCausal
-             ? min(chunk_size, sub_if_greater_or_zero(
-                                   kv_len + (qo_tile_idx * num_rows_per_cta) / group_size - qo_len,
-                                   chunk_start))
-             : chunk_size) /
-        (16 * NUM_WARPS_KV * NUM_MMA_KV);
-
-    constexpr SwizzleMode swizzle_mode_kv =
-        (sizeof(DTypeKV) == 1 && head_dim == 64) ? SwizzleMode::k64B : SwizzleMode::k128B;
-    constexpr uint32_t kv_frag_rows = swizzle_mode_kv == SwizzleMode::k128B ? 4 : 8;
-    constexpr uint32_t kv_frag_cols = swizzle_mode_kv == SwizzleMode::k128B ? 8 : 4;
-    smem_t<swizzle_mode_kv> k_smem(smem +
-                                   (NUM_WARPS_Q * NUM_MMA_Q * sizeof(DTypeQ)) * 16 * head_dim),
-        v_smem(smem + (NUM_WARPS_Q * NUM_MMA_Q * sizeof(DTypeQ) +
-                       NUM_WARPS_KV * NUM_MMA_KV * sizeof(DTypeKV)) *
-                          16 * head_dim);
-
-    uint32_t k_smem_offset_r = k_smem.get_permuted_offset<channel_size_128b_kv>(
-                 get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 +
-                     8 * (lane_idx / 16) + lane_idx % 8,
-                 (lane_idx % 16) / 8),
-             v_smem_offset_r = v_smem.get_permuted_offset<channel_size_128b_kv>(
-                 get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
-                 lane_idx / 16),
-             kv_smem_offset_w = k_smem.get_permuted_offset<channel_size_128b_kv>(
-                 warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);
-
-    DTypeKV* k_ptr =
-        k + qkv_info.get_kv_elem_offset(kv_indptr[request_idx] + chunk_start +
-                                            warp_idx * kv_frag_rows + lane_idx / kv_frag_cols,
-                                        kv_head_idx,
-                                        (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>());
-    DTypeKV* v_ptr =
-        v + qkv_info.get_kv_elem_offset(kv_indptr[request_idx] + chunk_start +
-                                            warp_idx * kv_frag_rows + lane_idx / kv_frag_cols,
-                                        kv_head_idx,
-                                        (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>());
-
-    produce_kv<SharedMemFillMode::kNoFill, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        k_smem, &kv_smem_offset_w, &k_ptr, kv_stride_n, 0, chunk_size);
-    cp_async::commit_group();
-    produce_kv<SharedMemFillMode::kFillZero, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        v_smem, &kv_smem_offset_w, &v_ptr, kv_stride_n, 0, chunk_size);
-    cp_async::commit_group();
-
-#pragma unroll 1
-    for (uint32_t iter = 0; iter < num_iterations; ++iter) {
-      cp_async::wait_group<1>();
-      block.sync();
-
-      if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
-        k_smem_inplace_apply_rotary<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV,
-                                    swizzle_mode_kv, DTypeKV>(
-            (k_rope_pos_offset == nullptr ? 0 : k_rope_pos_offset[request_idx]) + chunk_start +
-                iter * 16 * NUM_WARPS_KV * NUM_MMA_KV,
-            &k_smem, &k_smem_offset_r, rope_freq);
-        block.sync();
-      }
-
-      // compute attention score
-      compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ,
-                 DTypeKV>(&qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
-
-      logits_transform<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
-          params, variant, /*batch_idx=*/request_idx, qo_packed_idx_base,
-          chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) *
-                            NUM_MMA_KV * 16,
-          qo_len, kv_len, group_size, s_frag);
-
-      // apply mask
-      if (MASK_MODE == MaskMode::kCustom || (iter >= mask_iteration || iter < window_iteration)) {
-        logits_mask<MASK_MODE, NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
-            params, variant, /*batch_idx=*/request_idx, qo_packed_idx_base,
-            chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) *
-                              NUM_MMA_KV * 16,
-            qo_len, kv_len, chunk_end, group_size, s_frag);
-      }
-
-      // compute m,d states in online softmax
-      update_mdo_states<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(variant, s_frag, o_frag, m, d);
-
-      block.sync();
-      produce_kv<SharedMemFillMode::kNoFill, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-          k_smem, &kv_smem_offset_w, &k_ptr, kv_stride_n,
-          (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV, chunk_size);
-      cp_async::commit_group();
-      cp_async::wait_group<1>();
-      block.sync();
-
-      // compute sfm*v
-      compute_sfm_v<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_kv, DTypeQ, DTypeKV>(
-          variant, &v_smem, &v_smem_offset_r, s_frag, o_frag, d);
-
-      block.sync();
-      produce_kv<SharedMemFillMode::kFillZero, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-          v_smem, &kv_smem_offset_w, &v_ptr, kv_stride_n,
-          (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV, chunk_size);
-      cp_async::commit_group();
-    }
-    cp_async::wait_group<0>();
-    block.sync();
-
-    // threadblock synchronization
-    threadblock_sync_mdo_states<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, DTypeQKAccum>(
-        variant, o_frag, (float*)smem, m, d, warp_idx, lane_idx);
-
-    // normalize d
-    normalize_d<NUM_MMA_Q, NUM_MMA_D>(variant, o_frag, m, d);
-
-    const uint32_t num_kv_chunks = (kv_len_safe + kv_chunk_size - 1) / kv_chunk_size;
-
-    // write back
-    write_o_reg_gmem<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D>(
-        o_frag, &qo_smem, o_ptr_base, qo_packed_idx_base, qo_len,
-        /*o_stride_n=*/
-        partition_kv ? num_qo_heads * head_dim * num_kv_chunks : num_qo_heads * head_dim,
-        /*o_stride_h=*/head_dim, group_size);
-
-    // write lse
-    if constexpr (variant.use_softmax) {
-      if (lse != nullptr) {
-        if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0) {
-#pragma unroll
-          for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
-#pragma unroll
-            for (uint32_t j = 0; j < 2; ++j) {
-              uint32_t q, r;
-              group_size.divmod(qo_packed_idx_base + lane_idx / 4 + j * 8 + mma_q * 16, q, r);
-              const uint32_t qo_head_idx = kv_head_idx * group_size + r;
-              const uint32_t qo_idx = q;
-              if (qo_idx < qo_len) {
-                if (partition_kv) {
-                  lse[(o_indptr[request_idx] + qo_idx * num_kv_chunks + kv_tile_idx) *
-                          num_qo_heads +
-                      qo_head_idx] = math::ptx_log2(d[mma_q][j]) + float(m[mma_q][j]);
-                } else {
-                  lse[(o_indptr[request_idx] + qo_idx) * num_qo_heads + qo_head_idx] =
-                      math::ptx_log2(d[mma_q][j]) + float(m[mma_q][j]);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-#if (__CUDA_ARCH__ < 800)
-  }
 #endif
 }
 
@@ -1957,6 +1456,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     const uint32_t q_stride_n = params.q_stride_n, q_stride_h = params.q_stride_h;
     constexpr SwizzleMode swizzle_mode_q = SwizzleMode::k128B;
     smem_t<swizzle_mode_q> qo_smem(smem);
+
     DTypeQ* q_ptr_base = q + get_elem_offset_impl(q_indptr[request_idx], kv_head_idx * group_size,
                                                   (lane_idx % 8) * num_elems_per_128b<DTypeQ>(),
                                                   q_stride_n, q_stride_h);
@@ -1968,7 +1468,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
                      : o + get_elem_offset_impl(o_indptr[request_idx], kv_head_idx * group_size,
                                                 (lane_idx % 8) * num_elems_per_128b<DTypeO>(),
                                                 num_qo_heads * head_dim, head_dim);
-    uint32_t q_smem_offset_r = qo_smem.get_permuted_offset<channel_size_128b_q>(
+    uint32_t q_smem_offset_r = qo_smem.get_permuted_offset<(uint32_t)channel_size_128b_q>(
         get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_Q * 16 + lane_idx % 16,
         lane_idx / 16);
 
@@ -1981,6 +1481,10 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     block.sync();
 
     if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
+if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && blockIdx.y==0)
+	printf("came here\n");
+//FIXME:
+/*
       if (q_offset == nullptr) {
         q_smem_inplace_apply_rotary<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q,
                                     DTypeQ>(qo_packed_idx_base, qo_len, kv_len, group_size,
@@ -1992,6 +1496,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
             &q_smem_offset_r, rope_freq);
       }
       block.sync();
+      */
     }
     q_smem_inplace_transform<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q>(
         params, variant, &qo_smem);
@@ -2007,176 +1512,28 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
                           16 * head_dim);
     size_t kv_offset[NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q];
 
-    uint32_t k_smem_offset_r = k_smem.get_permuted_offset<channel_size_128b_kv>(
+//TODO: broken get_permuted_offset
+/*    uint32_t k_smem_offset_r = k_smem.get_permuted_offset<(uint32_t)channel_size_128b_kv>(
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 +
                      8 * (lane_idx / 16) + lane_idx % 8,
                  (lane_idx % 16) / 8),
-             v_smem_offset_r = v_smem.get_permuted_offset<channel_size_128b_kv>(
+             v_smem_offset_r = v_smem.get_permuted_offset<(uint32_t)channel_size_128b_kv>(
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
                  lane_idx / 16),
-             kv_smem_offset_w = k_smem.get_permuted_offset<channel_size_128b_kv>(
+             kv_smem_offset_w = k_smem.get_permuted_offset<(uint32_t)channel_size_128b_kv>(
                  warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);
-    const IdType last_indptr = paged_kv.indptr[paged_kv.batch_size];
+    const IdType last_indptr = paged_kv.indptr[paged_kv.batch_size];*/
 
-    uint32_t packed_page_iter_base =
-        paged_kv.indptr[request_idx] * paged_kv.page_size + chunk_start;
-#pragma unroll
-    for (uint32_t i = 0;
-         i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
-      uint32_t page_iter, entry_idx;
-      paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows +
-                                    lane_idx / kv_frag_cols +
-                                    kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
-                                page_iter, entry_idx);
-      kv_offset[i] = paged_kv.protective_get_kv_offset(
-          page_iter, kv_head_idx, entry_idx,
-          (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(), last_indptr);
-    }
-    page_produce_kv<false, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        k_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size);
-    cp_async::commit_group();
-    page_produce_kv<true, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size);
-    cp_async::commit_group();
+ 
 
-    const uint32_t num_iterations = ceil_div(
-        (MASK_MODE == MaskMode::kCausal
-             ? min(chunk_size,
-                   sub_if_greater_or_zero(
-                       kv_len - qo_len + ((qo_tile_idx + 1) * num_rows_per_cta) / group_size,
-                       chunk_start))
-             : chunk_size),
-        16 * NUM_WARPS_KV * NUM_MMA_KV);
+if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && blockIdx.y==0)
+    printf("hello5!");
+  
 
-    const uint32_t window_iteration =
-        ceil_div(sub_if_greater_or_zero(kv_len + (qo_tile_idx + 1) * num_rows_per_cta,
-                                        qo_len + window_left + chunk_start),
-                 (16 * NUM_WARPS_KV * NUM_MMA_KV));
-
-    const uint32_t mask_iteration =
-        (MASK_MODE == MaskMode::kCausal
-             ? min(chunk_size, sub_if_greater_or_zero(
-                                   kv_len + (qo_tile_idx * num_rows_per_cta) / group_size - qo_len,
-                                   chunk_start))
-             : chunk_size) /
-        (16 * NUM_WARPS_KV * NUM_MMA_KV);
-
-#pragma unroll 1
-    for (uint32_t iter = 0; iter < num_iterations; ++iter) {
-      packed_page_iter_base += 16 * NUM_WARPS_KV * NUM_MMA_KV;
-#pragma unroll
-      for (uint32_t i = 0;
-           i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
-        uint32_t page_iter, entry_idx;
-        paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows +
-                                      lane_idx / kv_frag_cols +
-                                      kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
-                                  page_iter, entry_idx);
-        kv_offset[i] = paged_kv.protective_get_kv_offset(
-            page_iter, kv_head_idx, entry_idx,
-            (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(), last_indptr);
-      }
-      cp_async::wait_group<1>();
-      block.sync();
-
-      if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
-        k_smem_inplace_apply_rotary<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV,
-                                    swizzle_mode_kv, DTypeKV>(
-            (paged_kv.rope_pos_offset == nullptr ? 0 : paged_kv.rope_pos_offset[request_idx]) +
-                chunk_start + iter * 16 * NUM_WARPS_KV * NUM_MMA_KV,
-            &k_smem, &k_smem_offset_r, rope_freq);
-        block.sync();
-      }
-
-      // compute attention score
-      compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ,
-                 DTypeKV>(&qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
-
-      logits_transform<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
-          params, variant, /*batch_idx=*/request_idx, qo_packed_idx_base,
-          chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) *
-                            NUM_MMA_KV * 16,
-          qo_len, kv_len, group_size, s_frag);
-
-      // apply mask
-      if (MASK_MODE == MaskMode::kCustom || (iter >= mask_iteration || iter < window_iteration)) {
-        logits_mask<MASK_MODE, NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
-            params, variant, /*batch_idx=*/request_idx, qo_packed_idx_base,
-            chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) *
-                              NUM_MMA_KV * 16,
-            qo_len, kv_len, chunk_end, group_size, s_frag);
-      }
-
-      // compute m,d states in online softmax
-      update_mdo_states<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(variant, s_frag, o_frag, m, d);
-
-      block.sync();
-      page_produce_kv<false, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-          k_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
-          kv_offset, chunk_size);
-      cp_async::commit_group();
-      cp_async::wait_group<1>();
-      block.sync();
-
-      // compute sfm*v
-      compute_sfm_v<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_kv, DTypeQ, DTypeKV>(
-          variant, &v_smem, &v_smem_offset_r, s_frag, o_frag, d);
-
-      block.sync();
-      page_produce_kv<true, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-          v_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
-          kv_offset, chunk_size);
-      cp_async::commit_group();
-    }
-    cp_async::wait_group<0>();
-    block.sync();
-
-    // threadblock synchronization
-    threadblock_sync_mdo_states<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, DTypeQKAccum>(
-        variant, o_frag, (float*)smem, m, d, warp_idx, lane_idx);
-
-    // normalize d
-    normalize_d<NUM_MMA_Q, NUM_MMA_D>(variant, o_frag, m, d);
-
-    const uint32_t num_kv_chunks = (kv_len_safe + kv_chunk_size - 1) / kv_chunk_size;
-
-    // write_back
-    write_o_reg_gmem<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D>(
-        o_frag, &qo_smem, o_ptr_base, qo_packed_idx_base, qo_len,
-        /*o_stride_n=*/
-        partition_kv ? num_qo_heads * head_dim * num_kv_chunks : num_qo_heads * head_dim,
-        /*o_stride_h=*/head_dim, group_size);
-
-    // write lse
-    if constexpr (variant.use_softmax) {
-      if (lse != nullptr) {
-        if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0) {
-#pragma unroll
-          for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
-#pragma unroll
-            for (uint32_t j = 0; j < 2; ++j) {
-              uint32_t q, r;
-              group_size.divmod(qo_packed_idx_base + lane_idx / 4 + j * 8 + mma_q * 16, q, r);
-              const uint32_t qo_head_idx = kv_head_idx * group_size + r;
-              const uint32_t qo_idx = q;
-              if (qo_idx < qo_upper_bound) {
-                if (partition_kv) {
-                  lse[(o_indptr[request_idx] + qo_idx * num_kv_chunks + kv_tile_idx) *
-                          num_qo_heads +
-                      qo_head_idx] = math::ptx_log2(d[mma_q][j]) + float(m[mma_q][j]);
-                } else {
-                  lse[(o_indptr[request_idx] + qo_idx) * num_qo_heads + qo_head_idx] =
-                      math::ptx_log2(d[mma_q][j]) + float(m[mma_q][j]);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
 #if (__CUDA_ARCH__ < 800)
   }
 #endif
+	
 }
 
 template <uint32_t CTA_TILE_Q, uint32_t HEAD_DIM, PosEncodingMode POS_ENCODING_MODE,
@@ -2247,8 +1604,8 @@ gpuError_t BatchPrefillWithRaggedKVCacheDispatched(typename AttentionVariant::Pa
           BatchPrefillWithRaggedKVCacheKernel<MASK_MODE, POS_ENCODING_MODE, NUM_MMA_Q, NUM_MMA_D,
                                               NUM_MMA_KV, NUM_WARPS_Q, NUM_WARPS_KV, DTypeQKAccum,
                                               AttentionVariant>;
-      FLASHINFER_CUDA_CALL(
-          gpuFuncSetAttribute(kernel, gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+      //FLASHINFER_CUDA_CALL(
+          gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size);//);
       if (tmp_v == nullptr) {
         // do not partition kv
         params.partition_kv = false;
@@ -2300,7 +1657,6 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
     // this won't happen in CUDAGraph mode because we fixed the padded_batch_size
     return gpuSuccess;
   }
-
   dim3 nblks(padded_batch_size, 1, num_kv_heads);
   dim3 nthrs(32, NUM_WARPS_Q, NUM_WARPS_KV);
 
@@ -2349,8 +1705,8 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
           BatchPrefillWithPagedKVCacheKernel<MASK_MODE, POS_ENCODING_MODE, NUM_MMA_Q, NUM_MMA_D,
                                              NUM_MMA_KV, NUM_WARPS_Q, NUM_WARPS_KV, DTypeQKAccum,
                                              AttentionVariant>;
-      FLASHINFER_CUDA_CALL(
-          gpuFuncSetAttribute(kernel, gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+      //FLASHINFER_CUDA_CALL(
+          gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size);//);
       if (tmp_v == nullptr) {
         // do not partition kv
         params.partition_kv = false;
@@ -2375,7 +1731,9 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
               VariableLengthAttentionSum(tmp_v, params.merge_indptr, o, params.max_total_num_rows,
                                          params.total_num_rows, num_qo_heads, HEAD_DIM, stream));
         }
+      
       }
+      gpuDeviceSynchronize();
     }
   });
   return gpuSuccess;

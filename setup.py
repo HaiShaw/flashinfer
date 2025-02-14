@@ -46,6 +46,7 @@ enable_aot = os.environ.get("FLASHINFER_ENABLE_AOT", "0") == "1"
 enable_bf16 = os.environ.get("FLASHINFER_ENABLE_BF16", "1") == "1"
 enable_fp8 = os.environ.get("FLASHINFER_ENABLE_FP8", "1") == "1"
 enable_sm90 = os.environ.get("FLASHINFER_ENABLE_SM90", "1") == "1"
+enable_sm90 = False
 
 
 def get_version():
@@ -263,14 +264,14 @@ if enable_aot:
     # decode_sources = list(gen_dir.glob("*decode_head*.cu"))
     decode_sources = list(gen_dir.glob("batch_*decode_head*.cu"))
     prefill_sources = [
-        f for f in gen_dir.glob("*prefill_head*.cu") if "_sm90" not in f.name
+        f for f in gen_dir.glob("batch_*prefill_head*.cu") if "_sm90" not in f.name
     ]
     prefill_sm90_sources = list(gen_dir.glob("*prefill_head*_sm90.cu"))
     ext_modules = [
         torch_cpp_ext.CUDAExtension(
             name="flashinfer._kernels",
             # sources=kernel_sources + decode_sources + prefill_sources,
-            sources=["csrc/batch_decode.cu"] + decode_sources,
+            sources=["csrc/batch_decode.cu", "csrc/batch_prefill.cu"] + decode_sources + prefill_sources,
             include_dirs=include_dirs,
             extra_compile_args={
                 "cxx": cxx_flags,

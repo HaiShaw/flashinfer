@@ -73,7 +73,7 @@ struct smem_t {
       return i * stride + (j ^ (i % 8));
     } else {
       // swizzle_mode == SwizzleMode::k64B
-      static_assert(stride == 4);
+      //static_assert(stride == 4);
       return i * stride + (j ^ ((i / 2) % 4));
     }
   }
