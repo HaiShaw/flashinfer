@@ -1,3 +1,6 @@
+BUILD:
+PYTORCH_ROCM_ARCH="native gfx90a gfx940 gfx941 gfx942" FLASHINFER_ENABLE_AOT=1 FLASHINFER_ENABLE_SM90=0 pip install --no-build-isolation --verbose --editable .
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://github.com/flashinfer-ai/web-data/blob/main/logo/FlashInfer-black-background.png?raw=true">
