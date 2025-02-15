@@ -46,7 +46,6 @@
 #include "mask.cuh"
 #include "variants.cuh"
 
-
 #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
 // TODO: Better place to put these custom functions.
 __device__ __hip_bfloat162 convert_half2_to_bfloat162(const __half2 h2) {
@@ -1500,11 +1499,16 @@ if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && block
     }
     q_smem_inplace_transform<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q>(
         params, variant, &qo_smem);
+  
+    constexpr bool _is64 = (sizeof(DTypeKV) == 1 && head_dim == 64);
+    // Only handling k128B for now. Hip compiler does not correctly handle ternery constexpr.
+    //constexpr SwizzleMode swizzle_mode_kv = (_is64 ? SwizzleMode::k64B : SwizzleMode::k128B);
+    //constexpr uint32_t kv_frag_rows = swizzle_mode_kv == SwizzleMode::k128B ? 4 : 8;
+    //constexpr uint32_t kv_frag_cols = swizzle_mode_kv == SwizzleMode::k128B ? 8 : 4;
+    constexpr SwizzleMode swizzle_mode_kv = SwizzleMode::k128B;
+    constexpr uint32_t kv_frag_rows = 4;
+    constexpr uint32_t kv_frag_cols = 8;
 
-    constexpr SwizzleMode swizzle_mode_kv =
-        (sizeof(DTypeKV) == 1 && head_dim == 64) ? SwizzleMode::k64B : SwizzleMode::k128B;
-    constexpr uint32_t kv_frag_rows = swizzle_mode_kv == SwizzleMode::k128B ? 4 : 8;
-    constexpr uint32_t kv_frag_cols = swizzle_mode_kv == SwizzleMode::k128B ? 8 : 4;
     smem_t<swizzle_mode_kv> k_smem(smem +
                                    (NUM_WARPS_Q * NUM_MMA_Q * sizeof(DTypeQ)) * 16 * head_dim),
         v_smem(smem + (NUM_WARPS_Q * NUM_MMA_Q * sizeof(DTypeQ) +
@@ -1512,19 +1516,36 @@ if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && block
                           16 * head_dim);
     size_t kv_offset[NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q];
 
-//TODO: broken get_permuted_offset
-/*    uint32_t k_smem_offset_r = k_smem.get_permuted_offset<(uint32_t)channel_size_128b_kv>(
+    uint32_t k_smem_offset_r = k_smem.get_permuted_offset<channel_size_128b_kv>(
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 +
                      8 * (lane_idx / 16) + lane_idx % 8,
                  (lane_idx % 16) / 8),
-             v_smem_offset_r = v_smem.get_permuted_offset<(uint32_t)channel_size_128b_kv>(
+             v_smem_offset_r = v_smem.get_permuted_offset<channel_size_128b_kv>(
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
                  lane_idx / 16),
-             kv_smem_offset_w = k_smem.get_permuted_offset<(uint32_t)channel_size_128b_kv>(
+             kv_smem_offset_w = k_smem.get_permuted_offset<channel_size_128b_kv>(
                  warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);
-    const IdType last_indptr = paged_kv.indptr[paged_kv.batch_size];*/
+    const IdType last_indptr = paged_kv.indptr[paged_kv.batch_size];
 
- 
+    uint32_t packed_page_iter_base =
+        paged_kv.indptr[request_idx] * paged_kv.page_size + chunk_start;
+#pragma unroll
+    for (uint32_t i = 0;
+         i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
+      uint32_t page_iter, entry_idx;
+      paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows +
+                                    lane_idx / kv_frag_cols +
+                                    kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
+                                page_iter, entry_idx);
+      kv_offset[i] = paged_kv.protective_get_kv_offset(
+          page_iter, kv_head_idx, entry_idx,
+          (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(), last_indptr);
+    }
+    page_produce_kv<false, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
+        k_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size);
+    cp_async::commit_group();
+    page_produce_kv<true, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
+        v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size);
 
 if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && blockIdx.y==0)
     printf("hello5!");
