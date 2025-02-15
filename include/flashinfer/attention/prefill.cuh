@@ -1481,8 +1481,6 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     block.sync();
 
     if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
-//FIXME:
-/*
       if (q_offset == nullptr) {
         q_smem_inplace_apply_rotary<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q,
                                     DTypeQ>(qo_packed_idx_base, qo_len, kv_len, group_size,
@@ -1494,7 +1492,6 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
             &q_smem_offset_r, rope_freq);
       }
       block.sync();
-      */
     }
     q_smem_inplace_transform<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q>(
         params, variant, &qo_smem);
@@ -1606,12 +1603,94 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
         block.sync();
       }
 
-    }
+      // compute attention score
+//      compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ,
+//                 DTypeKV>(&qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
 
+      logits_transform<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
+          params, variant, /*batch_idx=*/request_idx, qo_packed_idx_base,
+          chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) *
+                            NUM_MMA_KV * 16,
+          qo_len, kv_len, group_size, s_frag);
+
+      // apply mask
+      if (MASK_MODE == MaskMode::kCustom || (iter >= mask_iteration || iter < window_iteration)) {
+        logits_mask<MASK_MODE, NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
+            params, variant, /*batch_idx=*/request_idx, qo_packed_idx_base,
+            chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) *
+                              NUM_MMA_KV * 16,
+            qo_len, kv_len, chunk_end, group_size, s_frag);
+      }
+
+      // compute m,d states in online softmax
+      update_mdo_states<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(variant, s_frag, o_frag, m, d);
+
+      block.sync();
+      page_produce_kv<false, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
+          k_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
+          kv_offset, chunk_size);
+      cp_async::commit_group();
+      cp_async::wait_group<1>();
+      block.sync();
+
+      // compute sfm*v
+      compute_sfm_v<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_kv, DTypeQ, DTypeKV>(
+          variant, &v_smem, &v_smem_offset_r, s_frag, o_frag, d);
+
+      block.sync();
+      page_produce_kv<true, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
+          v_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
+          kv_offset, chunk_size);
+      cp_async::commit_group();
+    }
+    cp_async::wait_group<0>();
+    block.sync();
+
+    // threadblock synchronization
+    threadblock_sync_mdo_states<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, DTypeQKAccum>(
+        variant, o_frag, (float*)smem, m, d, warp_idx, lane_idx);
+
+    // normalize d
+    normalize_d<NUM_MMA_Q, NUM_MMA_D>(variant, o_frag, m, d);
+
+    const uint32_t num_kv_chunks = (kv_len_safe + kv_chunk_size - 1) / kv_chunk_size;
+
+    // write_back
+    write_o_reg_gmem<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D>(
+        o_frag, &qo_smem, o_ptr_base, qo_packed_idx_base, qo_len,
+        /*o_stride_n=*/
+        partition_kv ? num_qo_heads * head_dim * num_kv_chunks : num_qo_heads * head_dim,
+        /*o_stride_h=*/head_dim, group_size);
+
+    // write lse
+    if constexpr (variant.use_softmax) {
+      if (lse != nullptr) {
+        if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0) {
+#pragma unroll
+          for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
+#pragma unroll
+            for (uint32_t j = 0; j < 2; ++j) {
+              uint32_t q, r;
+              group_size.divmod(qo_packed_idx_base + lane_idx / 4 + j * 8 + mma_q * 16, q, r);
+              const uint32_t qo_head_idx = kv_head_idx * group_size + r;
+              const uint32_t qo_idx = q;
+              if (qo_idx < qo_upper_bound) {
+                if (partition_kv) {
+                  lse[(o_indptr[request_idx] + qo_idx * num_kv_chunks + kv_tile_idx) *
+                          num_qo_heads +
+                      qo_head_idx] = math::ptx_log2(d[mma_q][j]) + float(m[mma_q][j]);
+                } else {
+                  lse[(o_indptr[request_idx] + qo_idx) * num_qo_heads + qo_head_idx] =
+                      math::ptx_log2(d[mma_q][j]) + float(m[mma_q][j]);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
 if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && blockIdx.y==0)
     printf("hello5!");
-  
-
 #if (__CUDA_ARCH__ < 800)
   }
 #endif
