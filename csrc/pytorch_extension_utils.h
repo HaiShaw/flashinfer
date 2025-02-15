@@ -13,7 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
+// #pragma once
+// Workaround for a redefinition issue caused by HIPify
+#ifndef _CSRC_PYTORCH_EXTENSION_UTILS_H_
+#define _CSRC_PYTORCH_EXTENSION_UTILS_H_
+
 #include <Python.h>
 
 #include <torch/library.h>
@@ -246,3 +250,5 @@ inline bool is_float8_tensor(const at::Tensor& tensor) {
   return tensor.scalar_type() == at::ScalarType::Float8_e4m3fn ||
          tensor.scalar_type() == at::ScalarType::Float8_e5m2;
 }
+
+#endif  // _CSRC_PYTORCH_EXTENSION_UTILS_H_

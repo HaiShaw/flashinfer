@@ -280,7 +280,7 @@ if enable_aot:
     libraries = [
         "cublas",
         "cublasLt",
-    ] not check_hip_availability() else ["hipblas", "hipblaslt"]
+    ] if not check_hip_availability() else ["hipblas", "hipblaslt"]
     sm90a_flags = "-gencode arch=compute_90a,code=sm_90a".split()
     # FIXME: ROCm/HIP compiler flags
     hipcc_flags = [

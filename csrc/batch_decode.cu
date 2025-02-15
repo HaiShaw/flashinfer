@@ -20,7 +20,7 @@
 #include <optional>
 
 #include "batch_decode_config.inc"
-#include "pytorch_extension_utils.h"
+#include "./pytorch_extension_utils.h"
 #include "pytorch_conversion_utils.h"
 
 namespace flashinfer {

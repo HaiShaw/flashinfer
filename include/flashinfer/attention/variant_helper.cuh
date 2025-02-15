@@ -16,7 +16,11 @@
 #ifndef FLASHINFER_ATTENTION_VARIANT_HELPER_H
 #define FLASHINFER_ATTENTION_VARIANT_HELPER_H
 
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#include <hip/hip_runtime.h>
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #include <cuda_runtime.h>
+#endif
 
 #include <cstdint>
 
