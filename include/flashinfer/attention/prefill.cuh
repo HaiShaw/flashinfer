@@ -241,8 +241,9 @@ __device__ __forceinline__ void produce_kv(smem_t<swizzle_mode> smem, uint32_t* 
     for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i) {
 #pragma unroll
       for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(T)); ++j) {
-//FIXME load_128b_async
-//        smem.load_128b_async<fill_mode>(*smem_offset, *gptr, kv_idx < kv_len);
+//hipFIXED
+        //smem.load_128b_async<fill_mode>(*smem_offset, *gptr, kv_idx < kv_len);
+        smem.template load_128b_async<fill_mode>(*smem_offset, *gptr, kv_idx < kv_len);
         *smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
         *gptr += 8 * num_elems_per_128b<T>();
       }
@@ -259,8 +260,9 @@ __device__ __forceinline__ void produce_kv(smem_t<swizzle_mode> smem, uint32_t* 
     static_assert(NUM_MMA_KV * 2 % NUM_WARPS_Q == 0);
 #pragma unroll
     for (uint32_t i = 0; i < NUM_MMA_KV * 2 / NUM_WARPS_Q; ++i) {
-//FIXME load_128b_async
-//      smem.load_128b_async<fill_mode>(*smem_offset, *gptr, kv_idx < kv_len);
+//hipFIXED
+      //smem.load_128b_async<fill_mode>(*smem_offset, *gptr, kv_idx < kv_len);
+      smem.template load_128b_async<fill_mode>(*smem_offset, *gptr, kv_idx < kv_len);
       *smem_offset =
           smem.template advance_offset_by_row<num_warps * 8, channel_size_128b_kv>(*smem_offset);
       kv_idx += num_warps * 8;
@@ -292,8 +294,9 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
       DType* gptr = produce_v ? paged_kv.v_data + kv_offset[i] : paged_kv.k_data + kv_offset[i];
 #pragma unroll
       for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j) {
-//FIXME load_128b_async
-//        smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
+//hipFIXED
+        //smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
+        smem.template load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
         *smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
         gptr += 8 * num_elems_per_128b<DType>();
       }
@@ -310,8 +313,9 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
 #pragma unroll
     for (uint32_t i = 0; i < NUM_MMA_KV * 2 / NUM_WARPS_Q; ++i) {
       DType* gptr = produce_v ? paged_kv.v_data + kv_offset[i] : paged_kv.k_data + kv_offset[i];
-//FIXME load_128b_async
-//      smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
+//hipFIXED
+      //smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
+      smem.template load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
       kv_idx += num_warps * 8;
       *smem_offset =
           smem.template advance_offset_by_row<num_warps * 8, channel_size_128b_kv>(*smem_offset);
@@ -397,9 +401,10 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
 #pragma unroll
         for (uint32_t mma_do = 0; mma_do < NUM_MMA_D / 4; ++mma_do) {
           // load q fragment from gmem to smem
-//FIXME load_128b_async
-//          q_smem->load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
-//                                                              q_idx < qo_upper_bound);
+//hipFIXED
+          //q_smem->load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
+          q_smem->template load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
+                                                              q_idx < qo_upper_bound);
           q_smem_offset_w = q_smem->template advance_offset_by_column<8>(q_smem_offset_w, mma_do);
           q_ptr += 8 * num_elems_per_128b<DTypeQ>();
         }
@@ -583,7 +588,7 @@ __device__ __forceinline__ void k_smem_inplace_apply_rotary(const uint32_t kv_id
 }
 
 //FIXME
-#if 0
+#if 1
 template <uint32_t NUM_MMA_Q, uint32_t NUM_MMA_D, uint32_t NUM_MMA_KV, SwizzleMode swizzle_mode_q,
           SwizzleMode swizzle_mode_kv, typename DTypeQ, typename DTypeKV, typename DTypeQKAccum>
 __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
@@ -619,8 +624,11 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
         }
         b_frag_f8[0] = frag_layout_swizzle_16b_to_8b(b_frag_f8[0]);
         b_frag_f8[1] = frag_layout_swizzle_16b_to_8b(b_frag_f8[1]);
-//FIXME: overloaded...
+//hipFIXED 
 //	vec_cast<DTypeQ, DTypeKV>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
+	if constexpr(std::is_same<DTypeQ, __half>::value) 
+	if constexpr(std::is_same<DTypeKV, __half>::value) 
+	vec_cast<__half, __half>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
       } else {
         k_smem->ldmatrix_m8n8x4(*k_smem_offset_r, b_frag);
       }
@@ -838,7 +846,7 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant,
           half2 m2 = make_half2(m[mma_q][j], m[mma_q][j]);
 #pragma unroll
           for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
-//FIXME vec_cast
+//FIXME 
 //            *(half2*)&s_frag[mma_q][mma_kv][j * 2] =
 //                math::ptx_exp2(*(half2*)&s_frag[mma_q][mma_kv][j * 2] - m2);
 //            *(half2*)&s_frag[mma_q][mma_kv][j * 2 + 4] =
@@ -866,8 +874,10 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
       for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
-//FIXME vec_cast
-//        vec_cast<DTypeQ, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
+//hipFIXED 
+        //vec_cast<DTypeQ, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
+	if constexpr(std::is_same<DTypeQ, __half>::value) 
+           vec_cast<__half, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
       }
     }
   }
@@ -896,29 +906,32 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
       if constexpr (sizeof(DTypeKV) == 1) {
         uint32_t b_frag_f8[2];
         if (mma_d % 2 == 0) {
-//FIXME vec_cast
-//          v_smem->ldmatrix_m8n8x4_trans_left_half(*v_smem_offset_r, b_frag_f8);
+//FIXME 
+          v_smem->ldmatrix_m8n8x4_trans_left_half(*v_smem_offset_r, b_frag_f8);
         } else {
-//FIXME vec_cast
-//          v_smem->ldmatrix_m8n8x4_trans_right_half(*v_smem_offset_r, b_frag_f8);
+//FIXME 
+          v_smem->ldmatrix_m8n8x4_trans_right_half(*v_smem_offset_r, b_frag_f8);
         }
         b_frag_f8[0] = frag_layout_swizzle_16b_to_8b_trans(b_frag_f8[0]);
         b_frag_f8[1] = frag_layout_swizzle_16b_to_8b_trans(b_frag_f8[1]);
-//FIXME vec_cast
+//hipFIXED
 //        vec_cast<DTypeQ, DTypeKV>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
+	if constexpr(std::is_same<DTypeQ, __half>::value) 
+	if constexpr(std::is_same<DTypeKV, __half>::value) 
+            vec_cast<__half, __half>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
         swap(b_frag[1], b_frag[2]);
       } else {
-//FIXME vec_cast
-//        v_smem->ldmatrix_m8n8x4_trans(*v_smem_offset_r, b_frag);
+//FIXME 
+        //v_smem->ldmatrix_m8n8x4_trans(*v_smem_offset_r, b_frag);
       }
 #pragma unroll
       for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
         if constexpr (std::is_same_v<DTypeQKAccum, float>) {
-//FIXME vec_cast
+//FIXME 
 //          mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(
 //              o_frag[mma_q][mma_d], (uint32_t*)(s_frag_f16[mma_q][mma_kv]), b_frag);
         } else {
-//FIXME vec_cast
+//FIXME 
 //          mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(
 //              o_frag[mma_q][mma_d], (uint32_t*)s_frag[mma_q][mma_kv], b_frag);
         }
@@ -1113,8 +1126,11 @@ __device__ __forceinline__ void write_o_reg_gmem(
 #pragma unroll
       for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
         uint32_t o_frag_f16[4];
-//FIXME vec_cast
-//        vec_cast<DTypeO, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
+//hipFIXED
+        //vec_cast<DTypeO, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
+	if constexpr(std::is_same<DTypeO, __half>::value) 
+            vec_cast<__half, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
+
 #ifdef FLASHINFER_STMATRIX_M8N8X4_ENABLED
         // Hip compiler does not correctly handle ternery constexpr.
         //uint32_t o_smem_offset_w = o_smem->get_permuted_offset<channel_size_128b_out>(
@@ -1805,6 +1821,8 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
                                                   float* tmp_s, gpuStream_t stream) {
   using DTypeQ = typename AttentionVariant::DTypeQ;
   using DTypeKV = typename AttentionVariant::DTypeKV;
+  using DTypeO = typename AttentionVariant::DTypeO;
+  printf("\nDTYPS:<<<<%s,%s,%s>>>>>>>\n", typeid(DTypeQ).name(), typeid(DTypeKV).name(), typeid(DTypeO).name());
   const uint32_t padded_batch_size = params.padded_batch_size;
   const uint32_t num_qo_heads = params.num_qo_heads;
   const uint32_t num_kv_heads = params.paged_kv.num_heads;
