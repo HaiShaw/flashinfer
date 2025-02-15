@@ -162,9 +162,9 @@ __device__ __forceinline__ void k_frag_apply_llama_rope(T* x_first_half, T* x_se
     // 4 5 | 6 7
     uint32_t i = reg_id / 4, j = (reg_id % 4) / 2;
     __sincosf(float(kv_offset + 8 * i) * rope_freq[2 * j + reg_id % 2], &sin, &cos);
-    tmp = x_first_half[reg_id];
-    x_first_half[reg_id] = (tmp * cos - (float)x_second_half[reg_id] * sin);
-    x_second_half[reg_id] = ((float)x_second_half[reg_id] * cos + tmp * sin);
+    tmp = T2float<T>(x_first_half[reg_id]);
+    x_first_half[reg_id] = float2T<T>(tmp * cos - T2float<T>(x_second_half[reg_id]) * sin);
+    x_second_half[reg_id] = float2T<T>(T2float<T>(x_second_half[reg_id]) * cos + tmp * sin);
   }
 }
 
@@ -182,9 +182,9 @@ __device__ __forceinline__ void q_frag_apply_llama_rope(T* x_first_half, T* x_se
     uint32_t i = ((reg_id % 4) / 2), j = (reg_id / 4);
     __sincosf(float((qo_packed_offset + 8 * i) / group_size) * rope_freq[2 * j + reg_id % 2], &sin,
               &cos);
-    tmp = x_first_half[reg_id];
-    x_first_half[reg_id] = (tmp * cos - (float)x_second_half[reg_id] * sin);
-    x_second_half[reg_id] = ((float)x_second_half[reg_id] * cos + tmp * sin);
+    tmp = T2float<T>(x_first_half[reg_id]);
+    x_first_half[reg_id] = float2T<T>(tmp * cos - T2float<T>(x_second_half[reg_id]) * sin);
+    x_second_half[reg_id] = float2T<T>(T2float<T>(x_second_half[reg_id]) * cos + tmp * sin);
   }
 }
 
@@ -204,9 +204,9 @@ __device__ __forceinline__ void q_frag_apply_llama_rope_with_pos(T* x_first_half
     // 2 3 | 6 7
     uint32_t i = ((reg_id % 4) / 2), j = (reg_id / 4);
     __sincosf(pos[i] * rope_freq[2 * j + reg_id % 2], &sin, &cos);
-    tmp = x_first_half[reg_id];
-    x_first_half[reg_id] = (tmp * cos - (float)x_second_half[reg_id] * sin);
-    x_second_half[reg_id] = ((float)x_second_half[reg_id] * cos + tmp * sin);
+    tmp = T2float<T>(x_first_half[reg_id]);
+    x_first_half[reg_id] = float2T<T>(tmp * cos - T2float<T>(x_second_half[reg_id]) * sin);
+    x_second_half[reg_id] = float2T<T>(T2float<T>(x_second_half[reg_id]) * cos + tmp * sin);
   }
 }
 
@@ -1481,8 +1481,6 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     block.sync();
 
     if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
-if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && blockIdx.y==0)
-	printf("came here\n");
 //FIXME:
 /*
       if (q_offset == nullptr) {
@@ -1501,9 +1499,9 @@ if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && block
     q_smem_inplace_transform<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q>(
         params, variant, &qo_smem);
   
-    constexpr bool _is64 = (sizeof(DTypeKV) == 1 && head_dim == 64);
-    constexpr SwizzleMode swizzle_mode_kv = (_is64 ? SwizzleMode::k64B : SwizzleMode::k128B);
-    constexpr uint32_t kv_frag_rows = swizzle_mode_kv == SwizzleMode::k128B ? 4 : 8;
+    constexpr SwizzleMode swizzle_mode_kv =
+        (sizeof(DTypeKV) == 1 && head_dim == 64) ? SwizzleMode::k64B : SwizzleMode::k128B;
+     constexpr uint32_t kv_frag_rows = swizzle_mode_kv == SwizzleMode::k128B ? 4 : 8;
     constexpr uint32_t kv_frag_cols = swizzle_mode_kv == SwizzleMode::k128B ? 8 : 4;
 
     smem_t<swizzle_mode_kv> k_smem(smem +
@@ -1556,6 +1554,59 @@ if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && block
     cp_async::commit_group();
     page_produce_kv<true, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
         v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size);
+
+    cp_async::commit_group();
+
+    const uint32_t num_iterations = ceil_div(
+        (MASK_MODE == MaskMode::kCausal
+             ? min(chunk_size,
+                   sub_if_greater_or_zero(
+                       kv_len - qo_len + ((qo_tile_idx + 1) * num_rows_per_cta) / group_size,
+                       chunk_start))
+             : chunk_size),
+        16 * NUM_WARPS_KV * NUM_MMA_KV);
+
+    const uint32_t window_iteration =
+        ceil_div(sub_if_greater_or_zero(kv_len + (qo_tile_idx + 1) * num_rows_per_cta,
+                                        qo_len + window_left + chunk_start),
+                 (16 * NUM_WARPS_KV * NUM_MMA_KV));
+
+    const uint32_t mask_iteration =
+        (MASK_MODE == MaskMode::kCausal
+             ? min(chunk_size, sub_if_greater_or_zero(
+                                   kv_len + (qo_tile_idx * num_rows_per_cta) / group_size - qo_len,
+                                   chunk_start))
+             : chunk_size) /
+        (16 * NUM_WARPS_KV * NUM_MMA_KV);
+
+#pragma unroll 1
+    for (uint32_t iter = 0; iter < num_iterations; ++iter) {
+      packed_page_iter_base += 16 * NUM_WARPS_KV * NUM_MMA_KV;
+#pragma unroll
+      for (uint32_t i = 0;
+           i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
+        uint32_t page_iter, entry_idx;
+        paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows +
+                                      lane_idx / kv_frag_cols +
+                                      kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
+                                  page_iter, entry_idx);
+        kv_offset[i] = paged_kv.protective_get_kv_offset(
+            page_iter, kv_head_idx, entry_idx,
+            (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(), last_indptr);
+      }
+      cp_async::wait_group<1>();
+      block.sync();
+
+      if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
+        k_smem_inplace_apply_rotary<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV,
+                                    swizzle_mode_kv, DTypeKV>(
+            (paged_kv.rope_pos_offset == nullptr ? 0 : paged_kv.rope_pos_offset[request_idx]) +
+                chunk_start + iter * 16 * NUM_WARPS_KV * NUM_MMA_KV,
+            &k_smem, &k_smem_offset_r, rope_freq);
+        block.sync();
+      }
+
+    }
 
 if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && blockIdx.y==0)
     printf("hello5!");
