@@ -16,14 +16,17 @@
 #ifndef FLASHINFER_UTILS_CUH_
 #define FLASHINFER_UTILS_CUH_
 
-#include "./gpu_defines_cuda_hip.h"
 
 #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#include "./gpu_defines_hip_hip.h"
+
 #include <hip/hip_bf16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_fp8.h>
 #include <hip/hip_runtime.h>
 #elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
+#include "./gpu_defines_cuda_hip.h"
+
 #include <cuda_bf16.h>
 #include <cuda_device_runtime_api.h>
 #include <cuda_fp16.h>

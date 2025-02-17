@@ -1567,8 +1567,8 @@ gpuError_t SinglePrefillWithKVCacheDispatched(typename AttentionVariant::ParamsT
         uint32_t smem_size = (NUM_MMA_Q * NUM_WARPS_Q * sizeof(DTypeQ) +
                               NUM_MMA_KV * NUM_WARPS_KV * 2 * sizeof(DTypeQ)) *
                              16 * HEAD_DIM;
-        //FLASHINFER_CUDA_CALL(
-            gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size);//);
+        FLASHINFER_CUDA_CALL(
+            gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
         int num_blocks_per_sm = 0;
         int num_sm = 0;
         FLASHINFER_CUDA_CALL(
@@ -2032,8 +2032,8 @@ gpuError_t BatchPrefillWithRaggedKVCacheDispatched(typename AttentionVariant::Pa
           BatchPrefillWithRaggedKVCacheKernel<MASK_MODE, POS_ENCODING_MODE, NUM_MMA_Q, NUM_MMA_D,
                                               NUM_MMA_KV, NUM_WARPS_Q, NUM_WARPS_KV, DTypeQKAccum,
                                               AttentionVariant>;
-      //FLASHINFER_CUDA_CALL(
-          gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size);//);
+      FLASHINFER_CUDA_CALL(
+          gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
       if (tmp_v == nullptr) {
         // do not partition kv
         params.partition_kv = false;
@@ -2136,8 +2136,8 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
           BatchPrefillWithPagedKVCacheKernel<MASK_MODE, POS_ENCODING_MODE, NUM_MMA_Q, NUM_MMA_D,
                                              NUM_MMA_KV, NUM_WARPS_Q, NUM_WARPS_KV, DTypeQKAccum,
                                              AttentionVariant>;
-      //FLASHINFER_CUDA_CALL(
-          gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size);//);
+      FLASHINFER_CUDA_CALL(
+          gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
       if (tmp_v == nullptr) {
         // do not partition kv
         params.partition_kv = false;
