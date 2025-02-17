@@ -97,7 +97,6 @@ __device__ float compute_log2_approx_ftz(float x) {
 #endif
 
 /*!
-/*!
  * \brief Wrapper of PTX lg2.approx instruction, which computes log2(x)
  * \param x input
  */
