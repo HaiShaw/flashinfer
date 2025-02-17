@@ -866,7 +866,11 @@ __device__ __forceinline__ void update_mdo_states(
 #endif
 #pragma unroll
         for (uint32_t j = 0; j < 2; ++j) {
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+          float o_scale = math::ptx_exp2(float(__float2bfloat16(__half2float(m_prev[j])) * __float2bfloat16(__half2float(sm_scale.x)) - __float2bfloat16(__half2float(m[mma_q][j])) * __float2bfloat16(__half2float(sm_scale.x))));
+#else
           float o_scale = math::ptx_exp2(float(m_prev[j] * sm_scale.x - m[mma_q][j] * sm_scale.x));
+#endif
           d[mma_q][j] *= o_scale;
 #pragma unroll
           for (uint32_t mma_d = 0; mma_d < KTraits::NUM_MMA_D_VO; ++mma_d) {
