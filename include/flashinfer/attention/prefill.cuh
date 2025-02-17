@@ -46,6 +46,7 @@
 #include "mask.cuh"
 #include "variants.cuh"
 
+
 #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
 // TODO: Better place to put these custom functions.
 __device__ __hip_bfloat162 convert_half2_to_bfloat162(const __half2 h2) {
@@ -380,15 +381,11 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
                                                    smem_t<swizzle_mode>* q_smem) {
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
   constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
-  uint32_t lane_idx = threadIdx.x, warp_idx_x = get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>();
+  const uint32_t lane_idx = threadIdx.x, warp_idx_x = get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>();
 
   if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0) {
-    // Hip compiler does not correctly handle ternery constexpr.
-    //uint32_t q_smem_offset_w = q_smem->get_permuted_offset<channel_size_128b_q>(
-    //    warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8);
-    uint32_t q_smem_offset_w = q_smem->get_permuted_offset(
-        warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8, channel_size_128b_q);
-
+    uint32_t q_smem_offset_w = q_smem->template get_permuted_offset<channel_size_128b_q>(
+        warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8);
 
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
@@ -1132,18 +1129,12 @@ __device__ __forceinline__ void write_o_reg_gmem(
             vec_cast<__half, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
 
 #ifdef FLASHINFER_STMATRIX_M8N8X4_ENABLED
-        // Hip compiler does not correctly handle ternery constexpr.
-        //uint32_t o_smem_offset_w = o_smem->get_permuted_offset<channel_size_128b_out>(
-        //    (warp_idx_x * NUM_MMA_Q + mma_q) * 16 + lane_idx % 16, mma_d * 2 + lane_idx / 16);
-        uint32_t o_smem_offset_w = o_smem->get_permuted_offset(
-            (warp_idx_x * NUM_MMA_Q + mma_q) * 16 + lane_idx % 16, mma_d * 2 + lane_idx / 16, channel_size_128b_out);
+        uint32_t o_smem_offset_w = o_smem->template get_permuted_offset<channel_size_128b_out>(
+            (warp_idx_x * NUM_MMA_Q + mma_q) * 16 + lane_idx % 16, mma_d * 2 + lane_idx / 16);
         o_smem->stmatrix_m8n8x4(o_smem_offset_w, o_frag_f16);
 #else
-        // Hip compiler does not correctly handle ternery constexpr.
-	//uint32_t o_smem_offset_w = o_smem->get_permuted_offset<channel_size_128b_out>(
-        //    (warp_idx_x * NUM_MMA_Q + mma_q) * 16 + lane_idx / 4, mma_d * 2);
-	uint32_t o_smem_offset_w = o_smem->get_permuted_offset(
-            (warp_idx_x * NUM_MMA_Q + mma_q) * 16 + lane_idx / 4, mma_d * 2, channel_size_128b_out);
+        uint32_t o_smem_offset_w = o_smem->template get_permuted_offset<channel_size_128b_out>(
+            (warp_idx_x * NUM_MMA_Q + mma_q) * 16 + lane_idx / 4, mma_d * 2);
         ((uint32_t*)(o_smem->base + o_smem_offset_w))[lane_idx % 4] = o_frag_f16[0];
         ((uint32_t*)(o_smem->base + o_smem_offset_w + 8 * channel_size_128b_out))[lane_idx % 4] =
             o_frag_f16[1];
@@ -1154,11 +1145,9 @@ __device__ __forceinline__ void write_o_reg_gmem(
       }
     }
 
-    // Hip compiler does not correctly handle ternery constexpr.
-    //uint32_t o_smem_offset_w = o_smem->get_permuted_offset<channel_size_128b_out>(
-    //    warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8);
-    uint32_t o_smem_offset_w = o_smem->get_permuted_offset(
-        warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8, channel_size_128b_out);
+    uint32_t o_smem_offset_w = o_smem->template get_permuted_offset<channel_size_128b_out>(
+        warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8);
+
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
@@ -1719,7 +1708,6 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     const uint32_t q_stride_n = params.q_stride_n, q_stride_h = params.q_stride_h;
     constexpr SwizzleMode swizzle_mode_q = SwizzleMode::k128B;
     smem_t<swizzle_mode_q> qo_smem(smem);
-
     DTypeQ* q_ptr_base = q + get_elem_offset_impl(q_indptr[request_idx], kv_head_idx * group_size,
                                                   (lane_idx % 8) * num_elems_per_128b<DTypeQ>(),
                                                   q_stride_n, q_stride_h);
@@ -1731,13 +1719,9 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
                      : o + get_elem_offset_impl(o_indptr[request_idx], kv_head_idx * group_size,
                                                 (lane_idx % 8) * num_elems_per_128b<DTypeO>(),
                                                 num_qo_heads * head_dim, head_dim);
-    // Hip compiler does not correctly handle ternery constexpr.
-    //uint32_t q_smem_offset_r = qo_smem.get_permuted_offset<(uint32_t)channel_size_128b_q>(
-    //    get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_Q * 16 + lane_idx % 16,
-    //    lane_idx / 16);
-    uint32_t q_smem_offset_r = qo_smem.get_permuted_offset(
+    uint32_t q_smem_offset_r = qo_smem.get_permuted_offset<channel_size_128b_q>(
         get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_Q * 16 + lane_idx % 16,
-        lane_idx / 16, channel_size_128b_q);
+        lane_idx / 16);
 
     load_q_global_smem<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D>(
         qo_packed_idx_base, qo_upper_bound, q_ptr_base, q_stride_n, q_stride_h, group_size,
@@ -1762,12 +1746,11 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     }
     q_smem_inplace_transform<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q>(
         params, variant, &qo_smem);
-  
+
     constexpr SwizzleMode swizzle_mode_kv =
         (sizeof(DTypeKV) == 1 && head_dim == 64) ? SwizzleMode::k64B : SwizzleMode::k128B;
-     constexpr uint32_t kv_frag_rows = swizzle_mode_kv == SwizzleMode::k128B ? 4 : 8;
+    constexpr uint32_t kv_frag_rows = swizzle_mode_kv == SwizzleMode::k128B ? 4 : 8;
     constexpr uint32_t kv_frag_cols = swizzle_mode_kv == SwizzleMode::k128B ? 8 : 4;
-
     smem_t<swizzle_mode_kv> k_smem(smem +
                                    (NUM_WARPS_Q * NUM_MMA_Q * sizeof(DTypeQ)) * 16 * head_dim),
         v_smem(smem + (NUM_WARPS_Q * NUM_MMA_Q * sizeof(DTypeQ) +
@@ -1775,28 +1758,15 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
                           16 * head_dim);
     size_t kv_offset[NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q];
 
-    // Hip compiler does not correctly handle ternery constexpr.
-/*    uint32_t k_smem_offset_r = k_smem.get_permuted_offset<channel_size_128b_kv>(
+    uint32_t k_smem_offset_r = k_smem.template get_permuted_offset<channel_size_128b_kv>(
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 +
                      8 * (lane_idx / 16) + lane_idx % 8,
                  (lane_idx % 16) / 8),
-             v_smem_offset_r = v_smem.get_permuted_offset<channel_size_128b_kv>(
+             v_smem_offset_r = v_smem.template get_permuted_offset<channel_size_128b_kv>(
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
                  lane_idx / 16),
-             kv_smem_offset_w = k_smem.get_permuted_offset<channel_size_128b_kv>(
-                 warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);*/
-    uint32_t k_smem_offset_r = k_smem.get_permuted_offset(
-                 get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 +
-                     8 * (lane_idx / 16) + lane_idx % 8,
-                 (lane_idx % 16) / 8,
-		 channel_size_128b_kv),
-             v_smem_offset_r = v_smem.get_permuted_offset(
-                 get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
-                 lane_idx / 16,
-		 channel_size_128b_kv),
-             kv_smem_offset_w = k_smem.get_permuted_offset(
-                 warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols, channel_size_128b_kv);
-
+             kv_smem_offset_w = k_smem.template get_permuted_offset<channel_size_128b_kv>(
+                 warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);
     const IdType last_indptr = paged_kv.indptr[paged_kv.batch_size];
 
     uint32_t packed_page_iter_base =
@@ -1818,7 +1788,6 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     cp_async::commit_group();
     page_produce_kv<true, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
         v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size);
-
     cp_async::commit_group();
 
     const uint32_t num_iterations = ceil_div(
@@ -1961,7 +1930,6 @@ if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && block
 #if (__CUDA_ARCH__ < 800)
   }
 #endif
-	
 }
 
 template <uint32_t CTA_TILE_Q, uint32_t HEAD_DIM, PosEncodingMode POS_ENCODING_MODE,
@@ -2087,6 +2055,7 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
     // this won't happen in CUDAGraph mode because we fixed the padded_batch_size
     return gpuSuccess;
   }
+
   dim3 nblks(padded_batch_size, 1, num_kv_heads);
   dim3 nthrs(32, NUM_WARPS_Q, NUM_WARPS_KV);
 
@@ -2114,7 +2083,6 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
   const uint32_t max_num_mma_kv_smem =
       (max_smem_per_threadblock / (16 * HEAD_DIM * sizeof(DTypeQ)) - NUM_MMA_Q * NUM_WARPS_Q) /
       (2 * NUM_WARPS_KV);
-
 
   DISPATCH_NUM_MMA_KV(min(max_num_mma_kv_smem, max_num_mma_kv_reg), NUM_MMA_KV, {
     if constexpr (is_invalid_configuration<POS_ENCODING_MODE, DTypeKV, DTypeQKAccum>(
@@ -2162,7 +2130,6 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
               VariableLengthAttentionSum(tmp_v, params.merge_indptr, o, params.max_total_num_rows,
                                          params.total_num_rows, num_qo_heads, HEAD_DIM, stream));
         }
-      
       }
       gpuDeviceSynchronize();
     }
