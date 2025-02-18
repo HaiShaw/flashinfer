@@ -280,18 +280,21 @@ if enable_aot:
     libraries = [
         "cublas",
         "cublasLt",
-    ] if not check_hip_availability() else ["hipblas", "hipblaslt"]
+    ] if not check_hip_availability() else ["hiprtc", "amdhip64", "c10", "torch", "torch_python", "hipblas", "hipblaslt"]
     sm90a_flags = "-gencode arch=compute_90a,code=sm_90a".split()
     # FIXME: ROCm/HIP compiler flags
     hipcc_flags = [
         "-O3",
         "-std=c++17",
+        "-Xcompiler",
+        "-fPIC",
+        "--amdgpu-target=gfx942",
         "--offload-arch=gfx942",
         "-ffast-math",
         "-I/opt/rocm/include",
         "-L/opt/rocm/lib",
         "-lamdhip64",
-        "-D__HIP_PLATFORM_AMD__",
+        "-D__HIP_PLATFORM_AMD__=1",
     ]
     kernel_sources = [
         "csrc/bmm_fp8.cu",
