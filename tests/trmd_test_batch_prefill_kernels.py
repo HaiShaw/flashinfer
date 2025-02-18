@@ -20,6 +20,8 @@ from jit_utils import jit_prefill_attention_func_args
 
 import flashinfer
 
+from alibi_reference import alibi_attention
+
 torch.manual_seed(123)
 
 
@@ -59,7 +61,7 @@ def warmup_jit():
 @pytest.mark.parametrize("pos_encoding_mode", ["NONE"])
 @pytest.mark.parametrize("use_cuda_graph", [False])
 @pytest.mark.parametrize("logits_soft_cap", [0.0])
-@pytest.mark.parametrize("return_lse", [True])
+@pytest.mark.parametrize("return_lse", [False])
 @pytest.mark.parametrize("contiguous_kv", [True])
 def test_batch_prefill_with_paged_kv_cache(
     batch_size,
@@ -246,6 +248,8 @@ def test_batch_prefill_with_paged_kv_cache(
             ],
             dim=0,
         ).half()
+        # FIXME: add back single_prefill_with_kv_cache() call after finish implementation
+        """
         o_ref_i = flashinfer.prefill.single_prefill_with_kv_cache(
             qi,
             ki,
@@ -254,6 +258,15 @@ def test_batch_prefill_with_paged_kv_cache(
             pos_encoding_mode=pos_encoding_mode,
             logits_soft_cap=logits_soft_cap,
         )
+        """
+        # NOTICE: for now, we use alibi_attention() as reference function
+        assert num_kv_heads == num_qo_heads
+        assert not causal
+        assert pos_encoding_mode == 'NONE'
+        assert logits_soft_cap == 0.0
+        assert not return_lse
+
+        o_ref_i = alibi_attention(qi, ki, vi)
         o_i = o[q_indptr_cpu[i] : q_indptr_cpu[i + 1]]
         torch.testing.assert_close(o_i, o_ref_i, rtol=1e-3, atol=1e-3)
 
