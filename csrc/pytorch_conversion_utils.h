@@ -23,7 +23,13 @@ inline at::Tensor vec_to_tensor(const std::vector<int64_t>& vec) {
 
 inline std::vector<int64_t> tensor_to_vec(const at::Tensor& tensor) {
   const size_t size = tensor.numel();
-  const int64_t* first = tensor.const_data_ptr<int64_t>();
+  // const int64_t* first = tensor.const_data_ptr<int64_t>();
+  // Failed to find a matched PyTorch version to address the error below,
+  // so we use `data_ptr` (that is always defined) instead of `const_data_ptr`
+  // that is conditionally defined with `std::enable_if`.
+  // Error:
+  // flashinfer/flashinfer_kernels.abi3.so: error: symbol lookup error: undefined symbol: _ZNK2at10TensorBase14const_data_ptrIlTnNSt9enable_ifIXntsr3stdE10is_const_vIT_EEiE4typeELi0EEEPKS3_v (fatal)
+  const int64_t* first = tensor.data_ptr<int64_t>();
   const int64_t* last = first + size;
   return std::vector(first, last);
 }
