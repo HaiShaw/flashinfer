@@ -489,13 +489,13 @@ __device__ __forceinline__ void q_smem_inplace_apply_rotary_with_pos(
 //FIXME
 #if 0  // disable MMA on ROCm platform
         q_smem->ldmatrix_m8n8x4(q_smem_offset_r_first_half, q_frag_local[0]);
-#endif
+#endif // disable MMA on ROCm platform
         uint32_t q_smem_offset_r_last_half =
             q_smem->template advance_offset_by_column<NUM_MMA_D>(q_smem_offset_r_first_half, 0);
 //FIXME
 #if 0  // disable MMA on ROCm platform
         q_smem->ldmatrix_m8n8x4(q_smem_offset_r_last_half, q_frag_local[1]);
-#endif
+#endif // disable MMA on ROCm platform
         q_frag_apply_llama_rope_with_pos<DTypeQ>(
             (DTypeQ*)q_frag_local[0], (DTypeQ*)q_frag_local[1], rope_freq[mma_di],
             q_packed_idx_base + mma_q * 16 + lane_idx / 4, group_size, q_offset);
@@ -658,9 +658,9 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
         b_frag_f8[1] = frag_layout_swizzle_16b_to_8b(b_frag_f8[1]);
         //vec_cast<DTypeQ, DTypeKV>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
 //hipFIXED
-	      if constexpr(std::is_same<DTypeQ, __half>::value) 
-	      if constexpr(std::is_same<DTypeKV, __half>::value) 
-	      vec_cast<__half, __half>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
+        if constexpr(std::is_same<DTypeQ, __half>::value)
+        if constexpr(std::is_same<DTypeKV, __half>::value)
+        vec_cast<__half, __half>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
       } else {
 //FIXME
 #if 0  // disable MMA on ROCm platform
@@ -892,7 +892,7 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant,
           half2 m2 = make_half2(m[mma_q][j], m[mma_q][j]);
 #pragma unroll
           for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
-//FIXME 
+//FIXME
 #if 0  // disable PTX exp2() on ROCm platform
             *(half2*)&s_frag[mma_q][mma_kv][j * 2] =
                 math::ptx_exp2(*(half2*)&s_frag[mma_q][mma_kv][j * 2] - m2);
@@ -923,8 +923,8 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
 #pragma unroll
       for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
         //vec_cast<DTypeQ, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
-//hipFIXED 
-	      if constexpr(std::is_same<DTypeQ, __half>::value) 
+//hipFIXED
+        if constexpr(std::is_same<DTypeQ, __half>::value)
         vec_cast<__half, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
       }
     }
@@ -972,8 +972,8 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
         b_frag_f8[1] = frag_layout_swizzle_16b_to_8b_trans(b_frag_f8[1]);
         //vec_cast<DTypeQ, DTypeKV>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
 //hipFIXED
-	      if constexpr(std::is_same<DTypeQ, __half>::value) 
-	      if constexpr(std::is_same<DTypeKV, __half>::value) 
+        if constexpr(std::is_same<DTypeQ, __half>::value)
+        if constexpr(std::is_same<DTypeKV, __half>::value)
         vec_cast<__half, __half>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
         swap(b_frag[1], b_frag[2]);
       } else {
@@ -985,7 +985,7 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
 #pragma unroll
       for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
         if constexpr (std::is_same_v<DTypeQKAccum, float>) {
-//FIXME 
+//FIXME
 #if 0  // disable MMA on ROCm platform
           mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(
               o_frag[mma_q][mma_d], (uint32_t*)(s_frag_f16[mma_q][mma_kv]), b_frag);
@@ -1190,7 +1190,7 @@ __device__ __forceinline__ void write_o_reg_gmem(
         uint32_t o_frag_f16[4];
         //vec_cast<DTypeO, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
 //hipFIXED
-	      if constexpr(std::is_same<DTypeO, __half>::value) 
+        if constexpr(std::is_same<DTypeO, __half>::value)
         vec_cast<__half, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
 #ifdef FLASHINFER_STMATRIX_M8N8X4_ENABLED
         uint32_t o_smem_offset_w = o_smem->template get_permuted_offset<channel_size_128b_out>(
