@@ -19,6 +19,7 @@
 #include "./gpu_defines_cuda_hip.h"
 
 #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#include <hip/hip_runtime_api.h>
 // Workaround using copy/alias/symlink for the issue caused by HIPify
 // `cp /opt/rocm-6.3.2/include/hip/driver_types.h /opt/rocm-6.3.2/include/hip/hip_driver_types.h`
 // #include <hip/driver_types.h>

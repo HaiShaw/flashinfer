@@ -21,6 +21,11 @@
 #define FLASHINFER_FASTDIV_CUH_
 #include <cstdint>
 
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+// `__forceinline__` defined in "hip/amd_detail/host_defines.h"
+#include <hip/hip_runtime_api.h>
+#endif
+
 namespace flashinfer {
 
 struct uint_fastdiv {
