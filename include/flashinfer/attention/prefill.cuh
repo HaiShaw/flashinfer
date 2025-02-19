@@ -623,15 +623,27 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
   constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
   constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
   uint32_t a_frag[NUM_MMA_Q][4], b_frag[4];
+
+
+  typedef union b128_h {
+          b128_t b128;
+          __half h[8];
+          uint32_t i[4];
+	  __device__ b128_h() { memset( this, 0, sizeof( b128_h ) ); }
+  };
+  b128_h b128_h_;
+  b128_h b128_h_a_frag[NUM_MMA_Q];
+  b128_h b128_h_b_frag;
+
   // compute q*k^T
 #pragma unroll
   for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
-//FIXME
-#if 0  // disable MMA on ROCm platform
-      q_smem->ldmatrix_m8n8x4(*q_smem_offset_r, a_frag[mma_q]);
-#endif // disable MMA on ROCm platform
+      //q_smem->ldmatrix_m8n8x4(*q_smem_offset_r, a_frag[mma_q]);
+      b128_t* adrs = reinterpret_cast<__shared__ b128_t*>(q_smem->base + *q_smem_offset_r);
+      b128_h_a_frag[mma_q].b128 = *adrs;
+      
       *q_smem_offset_r =
           q_smem->template advance_offset_by_row<16, channel_size_128b_q>(*q_smem_offset_r);
     }
@@ -642,67 +654,75 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 #pragma unroll
     for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
       if constexpr (sizeof(DTypeKV) == 1) {
-        uint32_t b_frag_f8[2];
-        if (mma_d % 2 == 0) {
-//FIXME
-#if 0  // disable MMA on ROCm platform
-          k_smem->ldmatrix_m8n8x4_left_half(*k_smem_offset_r, b_frag_f8);
-#endif // disable MMA on ROCm platform
-        } else {
-//FIXME
-#if 0  // disable MMA on ROCm platform
-          k_smem->ldmatrix_m8n8x4_right_half(*k_smem_offset_r, b_frag_f8);
-#endif // disable MMA on ROCm platform
-        }
-        b_frag_f8[0] = frag_layout_swizzle_16b_to_8b(b_frag_f8[0]);
-        b_frag_f8[1] = frag_layout_swizzle_16b_to_8b(b_frag_f8[1]);
-        //vec_cast<DTypeQ, DTypeKV>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
-//hipFIXED
-        if constexpr(std::is_same<DTypeQ, __half>::value)
-        if constexpr(std::is_same<DTypeKV, __half>::value)
-        vec_cast<__half, __half>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
+	      //TODO
       } else {
-//FIXME
-#if 0  // disable MMA on ROCm platform
-        k_smem->ldmatrix_m8n8x4(*k_smem_offset_r, b_frag);
-#endif // disable MMA on ROCm platform
+        //k_smem->ldmatrix_m8n8x4(*k_smem_offset_r, b_frag);
+        b128_t* adrs = reinterpret_cast<__shared__ b128_t*>(k_smem->base + *k_smem_offset_r);
+        b128_h_b_frag.b128 = *adrs;
       }
       *k_smem_offset_r =
           k_smem->template advance_offset_by_row<16, channel_size_128b_kv>(*k_smem_offset_r);
 
+      const int bnd32 = (threadIdx.x/32)*32;
+      const int bnd16 = (threadIdx.x/16)*16;
+      const int bnd8 = (threadIdx.x/8)*8;
+      const int thrd8 = (threadIdx.x%8);
 #pragma unroll
       for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
         if constexpr (std::is_same_v<DTypeQKAccum, float>) {
-          if (mma_d == 0) {
-//FIXME
-#if 0  // disable MMA on ROCm platform
-            mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ, MMAMode::kInit>(
-                s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
-#endif // disable MMA on ROCm platform
-          } else {
-//FIXME
-#if 0  // disable MMA on ROCm platform
-            mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(s_frag[mma_q][mma_kv], a_frag[mma_q],
-                                                              b_frag);
-#endif // disable MMA on ROCm platform
-          }
+            //mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
+	    //replicate NVidia's ldmatrix_m8n8x4+mma_sync_m16n16k16_row_col_f16f16f16 (excl. output locations)
+	    if (mma_d == 0)
+	      for (int se=0; se<8; se++)
+		      (reinterpret_cast<float*>(&s_frag[mma_q][mma_kv])[se]) = 0.0f;
+	    for (int se=0; se<8; se++) {
+		    float tmp0 = 0, tmp1 = 0, tmp2 = 0, tmp3 = 0;
+	      for (int ie=0; ie<8; ie++) {
+	        //TODO: Can these shfl() be converted to dpp?
+		//lanes:0-8
+	        tmp0 +=
+	         __half2float(b128_h_a_frag[mma_q].h[ie]) *
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+se);
+	        tmp0 +=
+	         __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), bnd16+16+thrd8) *
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+8+se);
+	        //lanes:8-16
+	        tmp1 +=
+	         __half2float(b128_h_a_frag[mma_q].h[ie]) *
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+8+se);
+	        tmp1 +=
+                 __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), bnd16+16+8+thrd8) *
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+16+se);
+	        //lanes:16-24
+	        tmp2 +=
+	         __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), threadIdx.x-16) *
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+se);
+	        tmp2 +=
+                 __half2float(b128_h_a_frag[mma_q].h[ie]) *
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+8+se);
+	        //lanes:24-32
+	        tmp3 +=
+	         __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), threadIdx.x-16) *
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8-24+se);
+	        tmp3 +=
+                 __half2float(b128_h_a_frag[mma_q].h[ie]) *
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8-16+se);
+	      }
+              if ((threadIdx.x%32 >=0) && (threadIdx.x%32 < 8))
+                (reinterpret_cast<float*>(&s_frag[mma_q][mma_kv])[se]) += tmp0;
+              else if ((threadIdx.x%32 >=8) && (threadIdx.x%32 < 16))
+                (reinterpret_cast<float*>(&s_frag[mma_q][mma_kv])[se]) += tmp1;
+              else if ((threadIdx.x%32 >=16) && (threadIdx.x%32 < 24))
+                (reinterpret_cast<float*>(&s_frag[mma_q][mma_kv])[se]) += tmp2;
+	      else if ((threadIdx.x%32 >=24) && (threadIdx.x%32 < 32))
+                (reinterpret_cast<float*>(&s_frag[mma_q][mma_kv])[se]) += tmp3;
+	    }
         } else if (std::is_same_v<DTypeQKAccum, half>) {
-          if (mma_d == 0) {
-//FIXME
-#if 0  // disable MMA on ROCm platform
-            mma::mma_sync_m16n16k16_row_col_f16f16f16<MMAMode::kInit>(
-                (uint32_t*)s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
-#endif // disable MMA on ROCm platform
-          } else {
-//FIXME
-#if 0  // disable MMA on ROCm platform
-            mma::mma_sync_m16n16k16_row_col_f16f16f16((uint32_t*)s_frag[mma_q][mma_kv],
-                                                      a_frag[mma_q], b_frag);
-#endif // disable MMA on ROCm platform
-          }
+		//TODO
         }
       }
     }
+
     if constexpr (sizeof(DTypeKV) == 1) {
       if (mma_d % 2 == 1) {
         *k_smem_offset_r =

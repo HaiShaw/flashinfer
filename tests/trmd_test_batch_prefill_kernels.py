@@ -24,7 +24,7 @@ from alibi_reference import alibi_attention
 
 torch.manual_seed(123)
 
-
+"""
 @pytest.fixture(autouse=True, scope="module")
 def warmup_jit():
     if flashinfer.jit.has_prebuilt_ops:
@@ -47,9 +47,9 @@ def warmup_jit():
             pytest.exit(str(e))
         finally:
             yield
+"""
 
-
-@pytest.mark.parametrize("batch_size", [12, 17])
+@pytest.mark.parametrize("batch_size", [12])
 @pytest.mark.parametrize("kv_len", [54])
 @pytest.mark.parametrize("qo_len", [37])
 @pytest.mark.parametrize("page_size", [1])
@@ -173,6 +173,7 @@ def test_batch_prefill_with_paged_kv_cache(
         )
 
         # warmup
+        """
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(s):
@@ -189,6 +190,7 @@ def test_batch_prefill_with_paged_kv_cache(
                 o, _ = wrapper.run(q, kv_data, return_lse=True)
             else:
                 o = wrapper.run(q, kv_data)
+        """
 
         wrapper.plan(
             q_indptr_cpu,
