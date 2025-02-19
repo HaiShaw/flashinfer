@@ -663,18 +663,18 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
       *k_smem_offset_r =
           k_smem->template advance_offset_by_row<16, channel_size_128b_kv>(*k_smem_offset_r);
 
-      const int bnd32 = (threadIdx.x/32)*32;
-      const int bnd16 = (threadIdx.x/16)*16;
-      const int bnd8 = (threadIdx.x/8)*8;
-      const int thrd8 = (threadIdx.x%8);
+      int bnd32 = (threadIdx.y%2)*32;
+      int bnd16 = (threadIdx.x/16)*16;
+      int bnd8 = (threadIdx.x/8)*8;
+      int thrd8 = (threadIdx.x%8);
 #pragma unroll
       for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
         if constexpr (std::is_same_v<DTypeQKAccum, float>) {
             //mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
-	    //replicate NVidia's ldmatrix_m8n8x4+mma_sync_m16n16k16_row_col_f16f16f16 (excl. output locations)
 	    if (mma_d == 0)
-	      for (int se=0; se<8; se++)
+	      for (int se=0; se<8; se++) 
 		      (reinterpret_cast<float*>(&s_frag[mma_q][mma_kv])[se]) = 0.0f;
+
 	    //replicate NVidia's ldmatrix_m8n8x4+mma_sync_m16n16k16_row_col_f16f16f16 (excl. output locations)
             float tmp0[8] = {0,0,0,0,0,0,0,0};
 	    float tmp1[8] = {0,0,0,0,0,0,0,0};
@@ -685,39 +685,40 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 	      //lanes:0-8
 	      tmp0[se] += 
 	         __half2float(b128_h_a_frag[mma_q].h[ie]) * 
-	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+se);
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+se);
 	      tmp0[se] +=
-	         __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), bnd16+16+thrd8) * 
-	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+8+se);
+	         __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), bnd32+bnd16+16+thrd8) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+8+se);
 
 	      //lanes:8-16
 	      tmp1[se] += 
 	         __half2float(b128_h_a_frag[mma_q].h[ie]) * 
-	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+8+se);
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+8+se);
 	      tmp1[se] +=
-                 __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), bnd16+16+8+thrd8) * 
-	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+16+se);
+                 __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), bnd32+bnd16+16+8+thrd8) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+16+se);
 
 	      //lanes:16-24
 	      tmp2[se] += 
-	         __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), threadIdx.x-16) * 
-	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+se);
+	         __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), bnd32+threadIdx.x-16) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+se);
 	      tmp2[se] +=
                  __half2float(b128_h_a_frag[mma_q].h[ie]) * 
-	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8+8+se);
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+8+se);
 
 	      //lanes:24-32
 	      tmp3[se] += 
-	         __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), threadIdx.x-16) * 
-	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8-24+se);
+	         __shfl(__half2float(b128_h_a_frag[mma_q].h[ie]), bnd32+threadIdx.x-16) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8-24+se);
 	      tmp3[se] +=
                  __half2float(b128_h_a_frag[mma_q].h[ie]) * 
-	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd8-16+se);
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8-16+se);
 
 	     }
 	    }
 
 	    float tmp4[8];
+	    int thrd32 = (threadIdx.x/32)*32;
 	    for (int se=0; se<8; se++) { 
 	      if ((threadIdx.x%32 >=0) && (threadIdx.x%32 < 8))
                  tmp4[se] = tmp0[se]; 
@@ -729,41 +730,40 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
                  tmp4[se] = tmp3[se]; 
 	    }
 
-	    //shfl to match mma output layout
 	    int thrd4 = threadIdx.x%4;
-	    int thrd32 = (threadIdx.x/32)*32;
-	    for (int se=0; se<2; se++) {
+	    for (int se=0; se<2; se++) { 
 		float tmp[4];
-                tmp[0] = __shfl(tmp4[se+0*2], thrd32+threadIdx.x/4);
-                tmp[1] = __shfl(tmp4[se+1*2], thrd32+threadIdx.x/4);
-                tmp[2] = __shfl(tmp4[se+2*2], thrd32+threadIdx.x/4);
-                tmp[3] = __shfl(tmp4[se+3*2], thrd32+threadIdx.x/4);
+                tmp[0] = __shfl(tmp4[se+0*2], bnd32+threadIdx.x/4);
+                tmp[1] = __shfl(tmp4[se+1*2], bnd32+threadIdx.x/4);
+                tmp[2] = __shfl(tmp4[se+2*2], bnd32+threadIdx.x/4);
+                tmp[3] = __shfl(tmp4[se+3*2], bnd32+threadIdx.x/4);
                 (reinterpret_cast<float*>(&s_frag[mma_q][mma_kv])[se]) += tmp[thrd4];
 	    }
-	    for (int se=2; se<4; se++) {
+	    for (int se=2; se<4; se++) { 
 		float tmp[4];
-                tmp[0] = __shfl(tmp4[se+0*2-2], thrd32+24+threadIdx.x/4);
-                tmp[1] = __shfl(tmp4[se+1*2-2], thrd32+24+threadIdx.x/4);
-                tmp[2] = __shfl(tmp4[se+2*2-2], thrd32+24+threadIdx.x/4);
-                tmp[3] = __shfl(tmp4[se+3*2-2], thrd32+24+threadIdx.x/4);
+                tmp[0] = __shfl(tmp4[se+0*2-2], bnd32+24+threadIdx.x/4);
+                tmp[1] = __shfl(tmp4[se+1*2-2], bnd32+24+threadIdx.x/4);
+                tmp[2] = __shfl(tmp4[se+2*2-2], bnd32+24+threadIdx.x/4);
+                tmp[3] = __shfl(tmp4[se+3*2-2], bnd32+24+threadIdx.x/4);
                 (reinterpret_cast<float*>(&s_frag[mma_q][mma_kv])[se]) += tmp[thrd4];
 	    }
-	    for (int se=4; se<6; se++) {
+	    for (int se=4; se<6; se++) { 
 		float tmp[4];
-                tmp[0] = __shfl(tmp4[se+0*2-4], thrd32+16+threadIdx.x/4);
-                tmp[1] = __shfl(tmp4[se+1*2-4], thrd32+16+threadIdx.x/4);
-                tmp[2] = __shfl(tmp4[se+2*2-4], thrd32+16+threadIdx.x/4);
-                tmp[3] = __shfl(tmp4[se+3*2-4], thrd32+16+threadIdx.x/4);
+                tmp[0] = __shfl(tmp4[se+0*2-4], bnd32+16+threadIdx.x/4);
+                tmp[1] = __shfl(tmp4[se+1*2-4], bnd32+16+threadIdx.x/4);
+                tmp[2] = __shfl(tmp4[se+2*2-4], bnd32+16+threadIdx.x/4);
+                tmp[3] = __shfl(tmp4[se+3*2-4], bnd32+16+threadIdx.x/4);
                 (reinterpret_cast<float*>(&s_frag[mma_q][mma_kv])[se]) += tmp[thrd4];
 	    }
-	    for (int se=6; se<8; se++) {
+	    for (int se=6; se<8; se++) { 
 		float tmp[4];
-                tmp[0] = __shfl(tmp4[se+0*2-6], thrd32+8+threadIdx.x/4);
-                tmp[1] = __shfl(tmp4[se+1*2-6], thrd32+8+threadIdx.x/4);
-                tmp[2] = __shfl(tmp4[se+2*2-6], thrd32+8+threadIdx.x/4);
-                tmp[3] = __shfl(tmp4[se+3*2-6], thrd32+8+threadIdx.x/4);
+                tmp[0] = __shfl(tmp4[se+0*2-6], bnd32+8+threadIdx.x/4);
+                tmp[1] = __shfl(tmp4[se+1*2-6], bnd32+8+threadIdx.x/4);
+                tmp[2] = __shfl(tmp4[se+2*2-6], bnd32+8+threadIdx.x/4);
+                tmp[3] = __shfl(tmp4[se+3*2-6], bnd32+8+threadIdx.x/4);
                 (reinterpret_cast<float*>(&s_frag[mma_q][mma_kv])[se]) += tmp[thrd4];
 	    }
+
         } else if (std::is_same_v<DTypeQKAccum, half>) {
 		//TODO
         }
