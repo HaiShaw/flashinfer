@@ -85,6 +85,11 @@ using mma::MMAMode;
 constexpr uint32_t WARP_SIZE = 64;
 constexpr uint32_t CUDA_WARP_SIZE = 32;
 
+using fp16_t = uint16_t;
+using fp16x4_t = fp16_t __attribute__((ext_vector_type(4)));
+using fp32_t = float;
+using fp32x4_t = fp32_t __attribute__((ext_vector_type(4)));
+
 constexpr uint32_t get_num_warps_q(const uint32_t cta_tile_q) {
   if (cta_tile_q > 16) {
     return 4;
@@ -631,23 +636,15 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
                                            uint32_t* q_smem_offset_r,
                                            smem_t<swizzle_mode_kv>* k_smem,
                                            uint32_t* k_smem_offset_r,
-                                           DTypeQKAccum (*s_frag)[NUM_MMA_KV][8]) {
+                                           DTypeQKAccum (&s_frag)[NUM_MMA_Q]) {
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
   constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
   constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
-  uint32_t a_frag[NUM_MMA_Q][4], b_frag[4];
 
   const uint32_t real_lane_idx = threadIdx.x;
 
-  using fp16_t = uint16_t;
-  using fp16x4_t = fp16_t __attribute__((ext_vector_type(4)));
-
-  using fp32_t = float;
-  using fp32x4_t = fp32_t __attribute__((ext_vector_type(4)));
-
-  fp16x4_t a_frag_new[NUM_MMA_Q];
-  fp16x4_t b_frag_new;
-  fp32x4_t s_frag_new[NUM_MMA_Q];
+  fp16x4_t a_frag[NUM_MMA_Q]; // TODO: choose proper type by given DTypeQ & DTypeKV
+  fp16x4_t b_frag;            // TODO: choose proper type by given DTypeQ & DTypeKV
 
   // compute q*k^T
 #pragma unroll
@@ -661,7 +658,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
       // thread 0 read first 4 elements, thread 16 read last 4 elements, etc...
       auto* values = reinterpret_cast<unsigned char*>(q_smem->base + *q_smem_offset_r) \
          + sizeof(fp16x4_t) * (real_lane_idx / 16 % 2);
-      memcpy(a_frag_new + mma_q, values, sizeof(fp16x4_t));
+      memcpy(a_frag + mma_q, values, sizeof(fp16x4_t));
 #endif // disable MMA on ROCm platform
       *q_smem_offset_r =
           q_smem->template advance_offset_by_row<16, channel_size_128b_q>(*q_smem_offset_r);
@@ -700,7 +697,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
         // thread 0 read first 4 elements, thread 16 read last 4 elements, etc...
         auto* values = reinterpret_cast<unsigned char*>(k_smem->base + *k_smem_offset_r) \
           + sizeof(fp16x4_t) * (real_lane_idx / 16 % 2);
-        memcpy(&b_frag_new, values, sizeof(fp16x4_t));
+        memcpy(&b_frag, values, sizeof(fp16x4_t));
 #endif // disable MMA on ROCm platform
       }
       *k_smem_offset_r =
@@ -715,7 +712,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
             mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ, MMAMode::kInit>(
                 s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
 #else
-            s_frag_new[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag_new, a_frag_new[mma_q], fp32x4_t{0.f}, 0, 0, 0);
+            s_frag[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag, a_frag[mma_q], fp32x4_t{0.f}, 0, 0, 0);
 #endif // disable MMA on ROCm platform
           } else {
 //FIXME
@@ -723,7 +720,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
             mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(s_frag[mma_q][mma_kv], a_frag[mma_q],
                                                               b_frag);
 #else
-            s_frag_new[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag_new, a_frag_new[mma_q], s_frag_new[mma_q], 0, 0, 0);
+            s_frag[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag, a_frag[mma_q], s_frag[mma_q], 0, 0, 0);
 #endif // disable MMA on ROCm platform
           }
         } else if (std::is_same_v<DTypeQKAccum, half>) {
@@ -1796,6 +1793,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     constexpr uint32_t channel_size_128b_out = head_dim / num_elems_per_128b<DTypeO>();
 
     DTypeQKAccum s_frag[NUM_MMA_Q][NUM_MMA_KV][8];
+    fp32x4_t s_frag_new[NUM_MMA_Q]; // TODO: choose proper type by given DTypeQ & DTypeKV
     alignas(16) float o_frag[NUM_MMA_Q][NUM_MMA_D][8];
     DTypeQKAccum m[NUM_MMA_Q][2];
     float d[NUM_MMA_Q][2];
@@ -1946,9 +1944,9 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
       }
 
       // compute attention score
-      __syncthreads();
+      __builtin_amdgcn_s_barrier();
       compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ,
-                 DTypeKV>(&qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
+                 DTypeKV>(&qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag_new);
 
       logits_transform<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
           params, variant, /*batch_idx=*/request_idx, qo_packed_idx_base,
