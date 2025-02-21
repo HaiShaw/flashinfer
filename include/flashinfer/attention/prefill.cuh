@@ -714,12 +714,16 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 #if 0  // disable MMA on ROCm platform
             mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ, MMAMode::kInit>(
                 s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
+#else
+            s_frag_new[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag_new, a_frag_new[mma_q], fp32x4_t{0.f}, 0, 0, 0);
 #endif // disable MMA on ROCm platform
           } else {
 //FIXME
 #if 0  // disable MMA on ROCm platform
             mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(s_frag[mma_q][mma_kv], a_frag[mma_q],
                                                               b_frag);
+#else
+            s_frag_new[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag_new, a_frag_new[mma_q], s_frag_new[mma_q], 0, 0, 0);
 #endif // disable MMA on ROCm platform
           }
         } else if (std::is_same_v<DTypeQKAccum, half>) {
@@ -728,16 +732,12 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 #if 0  // disable MMA on ROCm platform
             mma::mma_sync_m16n16k16_row_col_f16f16f16<MMAMode::kInit>(
                 (uint32_t*)s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
-#else
-            s_frag_new[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag_new, a_frag_new[mma_q], fp32x4_t{0.f}, 0, 0, 0);
 #endif // disable MMA on ROCm platform
           } else {
 //FIXME
 #if 0  // disable MMA on ROCm platform
             mma::mma_sync_m16n16k16_row_col_f16f16f16((uint32_t*)s_frag[mma_q][mma_kv],
                                                       a_frag[mma_q], b_frag);
-#else
-            s_frag_new[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag_new, a_frag_new[mma_q], s_frag_new[mma_q], 0, 0, 0);
 #endif // disable MMA on ROCm platform
           }
         }
@@ -1946,6 +1946,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
       }
 
       // compute attention score
+      __syncthreads();
       compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ,
                  DTypeKV>(&qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
 
