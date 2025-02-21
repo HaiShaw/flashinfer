@@ -636,7 +636,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
                                            uint32_t* q_smem_offset_r,
                                            smem_t<swizzle_mode_kv>* k_smem,
                                            uint32_t* k_smem_offset_r,
-                                           DTypeQKAccum (&s_frag)[NUM_MMA_Q]) {
+                                           DTypeQKAccum (&s_frag)[NUM_MMA_Q][NUM_MMA_KV]) {
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
   constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
   constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
@@ -712,7 +712,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
             mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ, MMAMode::kInit>(
                 s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
 #else
-            s_frag[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag, a_frag[mma_q], fp32x4_t{0.f}, 0, 0, 0);
+            s_frag[mma_q][mma_kv] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag, a_frag[mma_q], fp32x4_t{0.f}, 0, 0, 0);
 #endif // disable MMA on ROCm platform
           } else {
 //FIXME
@@ -720,7 +720,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
             mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(s_frag[mma_q][mma_kv], a_frag[mma_q],
                                                               b_frag);
 #else
-            s_frag[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag, a_frag[mma_q], s_frag[mma_q], 0, 0, 0);
+            s_frag[mma_q][mma_kv] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag, a_frag[mma_q], s_frag[mma_q][mma_kv], 0, 0, 0);
 #endif // disable MMA on ROCm platform
           }
         } else if (std::is_same_v<DTypeQKAccum, half>) {
@@ -1793,7 +1793,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     constexpr uint32_t channel_size_128b_out = head_dim / num_elems_per_128b<DTypeO>();
 
     DTypeQKAccum s_frag[NUM_MMA_Q][NUM_MMA_KV][8];
-    fp32x4_t s_frag_new[NUM_MMA_Q]; // TODO: choose proper type by given DTypeQ & DTypeKV
+    fp32x4_t s_frag_new[NUM_MMA_Q][NUM_MMA_KV]; // TODO: choose proper type by given DTypeQ & DTypeKV
     alignas(16) float o_frag[NUM_MMA_Q][NUM_MMA_D][8];
     DTypeQKAccum m[NUM_MMA_Q][2];
     float d[NUM_MMA_Q][2];
