@@ -82,7 +82,8 @@ namespace cg = cooperative_groups;
 using cp_async::SharedMemFillMode;
 using mma::MMAMode;
 
-constexpr uint32_t WARP_SIZE = 32;
+constexpr uint32_t WARP_SIZE = 64;
+constexpr uint32_t CUDA_WARP_SIZE = 32;
 
 constexpr uint32_t get_num_warps_q(const uint32_t cta_tile_q) {
   if (cta_tile_q > 16) {
@@ -291,6 +292,10 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                                                 const paged_kv_t<DType, IdType>& paged_kv,
                                                 const uint32_t kv_idx_base, const size_t* kv_offset,
                                                 const uint32_t kv_len) {
+  if (CUDA_WARP_SIZE <= threadIdx.x) {
+    return;
+  }
+
   // NOTE(Zihao): for fp8, this function doesn't work for head_dim = 64 at the moment
   constexpr SharedMemFillMode fill_mode =
       produce_v ? SharedMemFillMode::kFillZero : SharedMemFillMode::kNoFill;
@@ -391,6 +396,10 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
                                                    const uint32_t q_stride_h,
                                                    const uint_fastdiv group_size,
                                                    smem_t<swizzle_mode>* q_smem) {
+  if (CUDA_WARP_SIZE <= threadIdx.x) {
+    return;
+  }
+
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
   constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
   const uint32_t lane_idx = threadIdx.x, warp_idx_x = get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>();
@@ -419,7 +428,7 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
         }
         q_smem_offset_w =
             q_smem->template advance_offset_by_row<4, channel_size_128b_q>(q_smem_offset_w) -
-            2 * NUM_MMA_D;
+            (NUM_MMA_D / 4) * 8;
       }
     }
   }
@@ -515,6 +524,10 @@ template <uint32_t NUM_WARPS_Q, uint32_t NUM_WARPS_KV, uint32_t NUM_MMA_Q, uint3
 __device__ __forceinline__ void q_smem_inplace_transform(
     const typename AttentionVariant::ParamsT& params, AttentionVariant variant,
     smem_t<swizzle_mode>* q_smem) {
+  if (CUDA_WARP_SIZE <= threadIdx.x) {
+    return;
+  }
+
   using DTypeQ = typename AttentionVariant::DTypeQ;
   const uint32_t warp_idx = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(), lane_idx = threadIdx.x;
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
@@ -623,6 +636,19 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
   constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
   constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
   uint32_t a_frag[NUM_MMA_Q][4], b_frag[4];
+
+  const uint32_t real_lane_idx = threadIdx.x;
+
+  using fp16_t = uint16_t;
+  using fp16x4_t = fp16_t __attribute__((ext_vector_type(4)));
+
+  using fp32_t = float;
+  using fp32x4_t = fp32_t __attribute__((ext_vector_type(4)));
+
+  fp16x4_t a_frag_new[NUM_MMA_Q];
+  fp16x4_t b_frag_new;
+  fp32x4_t s_frag_new[NUM_MMA_Q];
+
   // compute q*k^T
 #pragma unroll
   for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
@@ -631,6 +657,11 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 //FIXME
 #if 0  // disable MMA on ROCm platform
       q_smem->ldmatrix_m8n8x4(*q_smem_offset_r, a_frag[mma_q]);
+#else
+      // thread 0 read first 4 elements, thread 16 read last 4 elements, etc...
+      auto* values = reinterpret_cast<unsigned char*>(q_smem->base + *q_smem_offset_r) \
+         + sizeof(fp16x4_t) * (real_lane_idx / 16 % 2);
+      memcpy(a_frag_new + mma_q, values, sizeof(fp16x4_t));
 #endif // disable MMA on ROCm platform
       *q_smem_offset_r =
           q_smem->template advance_offset_by_row<16, channel_size_128b_q>(*q_smem_offset_r);
@@ -665,6 +696,11 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 //FIXME
 #if 0  // disable MMA on ROCm platform
         k_smem->ldmatrix_m8n8x4(*k_smem_offset_r, b_frag);
+#else
+        // thread 0 read first 4 elements, thread 16 read last 4 elements, etc...
+        auto* values = reinterpret_cast<unsigned char*>(k_smem->base + *k_smem_offset_r) \
+          + sizeof(fp16x4_t) * (real_lane_idx / 16 % 2);
+        memcpy(&b_frag_new, values, sizeof(fp16x4_t));
 #endif // disable MMA on ROCm platform
       }
       *k_smem_offset_r =
@@ -692,12 +728,16 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 #if 0  // disable MMA on ROCm platform
             mma::mma_sync_m16n16k16_row_col_f16f16f16<MMAMode::kInit>(
                 (uint32_t*)s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
+#else
+            s_frag_new[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag_new, a_frag_new[mma_q], fp32x4_t{0.f}, 0, 0, 0);
 #endif // disable MMA on ROCm platform
           } else {
 //FIXME
 #if 0  // disable MMA on ROCm platform
             mma::mma_sync_m16n16k16_row_col_f16f16f16((uint32_t*)s_frag[mma_q][mma_kv],
                                                       a_frag[mma_q], b_frag);
+#else
+            s_frag_new[mma_q] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag_new, a_frag_new[mma_q], s_frag_new[mma_q], 0, 0, 0);
 #endif // disable MMA on ROCm platform
           }
         }
@@ -1726,7 +1766,8 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     auto block = cg::this_thread_block();
     const uint32_t kv_chunk_size = *(params.kv_chunk_size_ptr);
 
-    const uint32_t bx = blockIdx.x, lane_idx = threadIdx.x,
+    const uint32_t bx = blockIdx.x, lane_idx = threadIdx.x % CUDA_WARP_SIZE,
+                   real_lane_idx = threadIdx.x,
                    warp_idx = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(), kv_head_idx = blockIdx.z;
     if (block_valid_mask && !block_valid_mask[bx]) {
       return;
@@ -1785,7 +1826,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
                                                 num_qo_heads * head_dim, head_dim);
     uint32_t q_smem_offset_r = qo_smem.get_permuted_offset<channel_size_128b_q>(
         get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_Q * 16 + lane_idx % 16,
-        lane_idx / 16);
+        real_lane_idx / 16 / 2);
 
     load_q_global_smem<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D>(
         qo_packed_idx_base, qo_upper_bound, q_ptr_base, q_stride_n, q_stride_h, group_size,
@@ -1808,8 +1849,10 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
       }
       block.sync();
     }
+#if 0 // no necessary to do shared memory shuffling on ROCm platform
     q_smem_inplace_transform<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, swizzle_mode_q>(
         params, variant, &qo_smem);
+#endif
 
     constexpr SwizzleMode swizzle_mode_kv =
         (sizeof(DTypeKV) == 1 && head_dim == 64) ? SwizzleMode::k64B : SwizzleMode::k128B;
@@ -1823,9 +1866,8 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     size_t kv_offset[NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q];
 
     uint32_t k_smem_offset_r = k_smem.template get_permuted_offset<channel_size_128b_kv>(
-                 get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 +
-                     8 * (lane_idx / 16) + lane_idx % 8,
-                 (lane_idx % 16) / 8),
+                 get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
+                 real_lane_idx / 16 / 2),
              v_smem_offset_r = v_smem.template get_permuted_offset<channel_size_128b_kv>(
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
                  lane_idx / 16),
@@ -2121,7 +2163,7 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
   }
 
   dim3 nblks(padded_batch_size, 1, num_kv_heads);
-  dim3 nthrs(32, NUM_WARPS_Q, NUM_WARPS_KV);
+  dim3 nthrs(WARP_SIZE, NUM_WARPS_Q, NUM_WARPS_KV);
 
   constexpr uint32_t NUM_MMA_D = HEAD_DIM / 16;
   using DTypeQKAccum =
