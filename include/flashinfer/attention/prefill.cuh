@@ -1007,6 +1007,73 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
 #if 0  // disable MMA on ROCm platform
           mma::rowsum_f16f16f32(d[mma_q], s_frag_f16[mma_q][mma_kv]);
 #endif // disable MMA on ROCm platform
+
+        float rwsm0 = 0, rwsm1 = 0;
+        int thrd4 = (threadIdx.x/4)*4;
+        int bnd32 = (threadIdx.y%2)*32;
+        rwsm0 += __shfl(s_frag[mma_q][mma_kv][0], bnd32+thrd4) +
+                 __shfl(s_frag[mma_q][mma_kv][1], bnd32+thrd4) +
+                 __shfl(s_frag[mma_q][mma_kv][4], bnd32+thrd4) +
+                 __shfl(s_frag[mma_q][mma_kv][5], bnd32+thrd4) +
+
+                 __shfl(s_frag[mma_q][mma_kv][0], bnd32+thrd4+1) +
+                 __shfl(s_frag[mma_q][mma_kv][1], bnd32+thrd4+1) +
+                 __shfl(s_frag[mma_q][mma_kv][4], bnd32+thrd4+1) +
+                 __shfl(s_frag[mma_q][mma_kv][5], bnd32+thrd4+1) +
+
+                 __shfl(s_frag[mma_q][mma_kv][0], bnd32+thrd4+2) +
+                 __shfl(s_frag[mma_q][mma_kv][1], bnd32+thrd4+2) +
+                 __shfl(s_frag[mma_q][mma_kv][4], bnd32+thrd4+2) +
+                 __shfl(s_frag[mma_q][mma_kv][5], bnd32+thrd4+2) +
+
+                 __shfl(s_frag[mma_q][mma_kv][0], bnd32+thrd4+3) +
+                 __shfl(s_frag[mma_q][mma_kv][1], bnd32+thrd4+3) +
+                 __shfl(s_frag[mma_q][mma_kv][4], bnd32+thrd4+3) +
+                 __shfl(s_frag[mma_q][mma_kv][5], bnd32+thrd4+3);
+
+
+        rwsm1 += __shfl(s_frag[mma_q][mma_kv][2], bnd32+thrd4) +
+                 __shfl(s_frag[mma_q][mma_kv][3], bnd32+thrd4) +
+                 __shfl(s_frag[mma_q][mma_kv][6], bnd32+thrd4) +
+                 __shfl(s_frag[mma_q][mma_kv][7], bnd32+thrd4) +
+
+                 __shfl(s_frag[mma_q][mma_kv][2], bnd32+thrd4+1) +
+                 __shfl(s_frag[mma_q][mma_kv][3], bnd32+thrd4+1) +
+                 __shfl(s_frag[mma_q][mma_kv][6], bnd32+thrd4+1) +
+                 __shfl(s_frag[mma_q][mma_kv][7], bnd32+thrd4+1) +
+
+                 __shfl(s_frag[mma_q][mma_kv][2], bnd32+thrd4+2) +
+                 __shfl(s_frag[mma_q][mma_kv][3], bnd32+thrd4+2) +
+                 __shfl(s_frag[mma_q][mma_kv][6], bnd32+thrd4+2) +
+                 __shfl(s_frag[mma_q][mma_kv][7], bnd32+thrd4+2) +
+
+                 __shfl(s_frag[mma_q][mma_kv][2], bnd32+thrd4+3) +
+                 __shfl(s_frag[mma_q][mma_kv][3], bnd32+thrd4+3) +
+                 __shfl(s_frag[mma_q][mma_kv][6], bnd32+thrd4+3) +
+                 __shfl(s_frag[mma_q][mma_kv][7], bnd32+thrd4+3);
+
+                 d[0][0] = rwsm0;
+                 d[0][1] = rwsm1;
+  if(iter == 0 && mma_kv == 0 && mma_q == 0)
+  if (threadIdx.y==1 && threadIdx.z==0 && blockIdx.x==0 && blockIdx.y==0 && blockIdx.z==0) {
+      //if (threadIdx.x==0) printf("----NUM_MMA_D: %d, NUM_MMA_Q: %d----", NUM_MMA_D, NUM_MMA_Q);
+      //for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) 
+          for (int ln=0; ln<32; ln++) {
+              if (ln == threadIdx.x) {
+                printf("\nrwsm%d,%f,%f %s", ln,
+                                //__half2float(d[0][0]),
+                                //__half2float(d[0][1]),
+                                d[0][0],
+				d[0][1],
+                                (ln==31)?"\n":""
+                        );
+              }
+          }
+  }
+
+
+
+
         } else {
 //FIXME
 #if 0  // disable MMA on ROCm platform
