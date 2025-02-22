@@ -810,15 +810,12 @@ __device__ __forceinline__ void logits_mask(const typename AttentionVariant::Par
                                             const uint32_t kv_len, const uint32_t chunk_end,
                                             const uint_fastdiv group_size,
                                             DTypeQKAccum (*s_frag)[NUM_MMA_KV][4]) {
-  const uint32_t lane_idx = threadIdx.x, kv_head_idx = blockIdx.z;
-  uint32_t q[NUM_MMA_Q][2], r[NUM_MMA_Q][2];
+  const uint32_t real_lane_idx = threadIdx.x, kv_head_idx = blockIdx.z;
+  uint32_t q[NUM_MMA_Q], r[NUM_MMA_Q];
 #pragma unroll
   for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
-#pragma unroll
-    for (uint32_t j = 0; j < 2; ++j) {
-      group_size.divmod(qo_packed_idx_base + mma_q * 16 + lane_idx / 4 + 8 * j, q[mma_q][j],
-                        r[mma_q][j]);
-    }
+    group_size.divmod(qo_packed_idx_base + mma_q * 16 + real_lane_idx % 16, q[mma_q],
+                      r[mma_q]);
   }
 
 #pragma unroll
@@ -826,11 +823,10 @@ __device__ __forceinline__ void logits_mask(const typename AttentionVariant::Par
 #pragma unroll
     for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
 #pragma unroll
-      for (uint32_t reg_id = 0; reg_id < 8; ++reg_id) {
-        const uint32_t q_idx = q[mma_q][(reg_id % 4) / 2], kv_idx = kv_idx_base + mma_kv * 16 +
-                                                                    2 * (lane_idx % 4) +
-                                                                    8 * (reg_id / 4) + reg_id % 2;
-        const uint32_t qo_head_idx = kv_head_idx * group_size + r[mma_q][(reg_id % 4) / 2];
+      for (uint32_t reg_id = 0; reg_id < 4; ++reg_id) {
+        const uint32_t q_idx = q[mma_q], kv_idx = kv_idx_base + mma_kv * 16 +
+                                                  (real_lane_idx / 16) * 4 + reg_id;
+        const uint32_t qo_head_idx = kv_head_idx * group_size + r[mma_q];
         const bool mask =
             (!(MASK_MODE == MaskMode::kCausal
                    ? (kv_idx + qo_len > kv_len + q_idx || (kv_idx >= chunk_end))
