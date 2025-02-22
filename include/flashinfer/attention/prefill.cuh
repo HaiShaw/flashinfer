@@ -368,14 +368,14 @@ __device__ __forceinline__ void init_rope_freq(float (*rope_freq)[4],
 }
 
 template <uint32_t NUM_MMA_Q, uint32_t NUM_MMA_D, typename DTypeQKAccum, typename AttentionVariant>
-__device__ __forceinline__ void init_states(AttentionVariant variant, float (*o_frag)[NUM_MMA_D][8],
-                                            DTypeQKAccum (*m)[2], float (*d)[2]) {
+__device__ __forceinline__ void init_states(AttentionVariant variant, float (*o_frag)[NUM_MMA_D][4],
+                                            DTypeQKAccum (*m)[1], float (*d)[1]) {
 #pragma unroll
   for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
     for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
 #pragma unroll
-      for (uint32_t reg_id = 0; reg_id < 8; ++reg_id) {
+      for (uint32_t reg_id = 0; reg_id < 4; ++reg_id) {
         o_frag[mma_q][mma_d][reg_id] = 0.f;
       }
     }
@@ -844,24 +844,24 @@ template <uint32_t NUM_MMA_Q, uint32_t NUM_MMA_D, uint32_t NUM_MMA_KV, typename 
           typename AttentionVariant>
 __device__ __forceinline__ void update_mdo_states(AttentionVariant variant,
                                                   DTypeQKAccum (*s_frag)[NUM_MMA_KV][4],
-                                                  float (*o_frag)[NUM_MMA_D][8],
-                                                  DTypeQKAccum (*m)[2], float (*d)[2]) {
+                                                  float (*o_frag)[NUM_MMA_D][4],
+                                                  DTypeQKAccum (*m)[1], float (*d)[1]) {
   if constexpr (variant.use_softmax) {
     if constexpr (std::is_same_v<DTypeQKAccum, float>) {
 #pragma unroll
       for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
-        for (uint32_t j = 0; j < 2; ++j) {
+        for (uint32_t j = 0; j < 1; ++j) {
           float m_prev = m[mma_q][j];
 #pragma unroll
           for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
             float m_local =
                 max(max(s_frag[mma_q][mma_kv][j * 2 + 0], s_frag[mma_q][mma_kv][j * 2 + 1]),
-                    max(s_frag[mma_q][mma_kv][j * 2 + 4], s_frag[mma_q][mma_kv][j * 2 + 5]));
+                    max(s_frag[mma_q][mma_kv][j * 2 + 2], s_frag[mma_q][mma_kv][j * 2 + 3]));
             m[mma_q][j] = max(m[mma_q][j], m_local);
           }
-          m[mma_q][j] = max(m[mma_q][j], math::shfl_xor_sync(m[mma_q][j], 0x2));
-          m[mma_q][j] = max(m[mma_q][j], math::shfl_xor_sync(m[mma_q][j], 0x1));
+          m[mma_q][j] = max(m[mma_q][j], math::shfl_xor_sync(m[mma_q][j], 0x10));
+          m[mma_q][j] = max(m[mma_q][j], math::shfl_xor_sync(m[mma_q][j], 0x20));
 
           float o_scale = math::ptx_exp2(m_prev - m[mma_q][j]);
           d[mma_q][j] *= o_scale;
@@ -869,8 +869,8 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant,
           for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
             o_frag[mma_q][mma_d][j * 2 + 0] *= o_scale;
             o_frag[mma_q][mma_d][j * 2 + 1] *= o_scale;
-            o_frag[mma_q][mma_d][j * 2 + 4] *= o_scale;
-            o_frag[mma_q][mma_d][j * 2 + 5] *= o_scale;
+            o_frag[mma_q][mma_d][j * 2 + 2] *= o_scale;
+            o_frag[mma_q][mma_d][j * 2 + 3] *= o_scale;
           }
 #pragma unroll
           for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
@@ -878,10 +878,10 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant,
                 math::ptx_exp2(s_frag[mma_q][mma_kv][j * 2 + 0] - m[mma_q][j]);
             s_frag[mma_q][mma_kv][j * 2 + 1] =
                 math::ptx_exp2(s_frag[mma_q][mma_kv][j * 2 + 1] - m[mma_q][j]);
-            s_frag[mma_q][mma_kv][j * 2 + 4] =
-                math::ptx_exp2(s_frag[mma_q][mma_kv][j * 2 + 4] - m[mma_q][j]);
-            s_frag[mma_q][mma_kv][j * 2 + 5] =
-                math::ptx_exp2(s_frag[mma_q][mma_kv][j * 2 + 5] - m[mma_q][j]);
+            s_frag[mma_q][mma_kv][j * 2 + 2] =
+                math::ptx_exp2(s_frag[mma_q][mma_kv][j * 2 + 2] - m[mma_q][j]);
+            s_frag[mma_q][mma_kv][j * 2 + 3] =
+                math::ptx_exp2(s_frag[mma_q][mma_kv][j * 2 + 3] - m[mma_q][j]);
           }
         }
       }
@@ -953,7 +953,7 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
                                               smem_t<swizzle_mode>* v_smem,
                                               uint32_t* v_smem_offset_r,
                                               DTypeQKAccum (*s_frag)[NUM_MMA_KV][4],
-                                              float (*o_frag)[NUM_MMA_D][8], float (*d)[2]) {
+                                              float (*o_frag)[NUM_MMA_D][4], float (*d)[1]) {
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
   constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
 
@@ -1056,8 +1056,8 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
 }
 
 template <uint32_t NUM_MMA_Q, uint32_t NUM_MMA_D, typename DTypeQKAccum, typename AttentionVariant>
-__device__ __forceinline__ void normalize_d(AttentionVariant variant, float (*o_frag)[NUM_MMA_D][8],
-                                            DTypeQKAccum (*m)[2], float (*d)[2]) {
+__device__ __forceinline__ void normalize_d(AttentionVariant variant, float (*o_frag)[NUM_MMA_D][4],
+                                            DTypeQKAccum (*m)[1], float (*d)[1]) {
   if constexpr (variant.use_softmax) {
     float d_rcp[NUM_MMA_Q][2];
     // compute reciprocal of d
@@ -1075,7 +1075,7 @@ __device__ __forceinline__ void normalize_d(AttentionVariant variant, float (*o_
 #pragma unroll
       for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
 #pragma unroll
-        for (uint32_t reg_id = 0; reg_id < 8; ++reg_id) {
+        for (uint32_t reg_id = 0; reg_id < 4; ++reg_id) {
           o_frag[mma_q][mma_d][reg_id] =
               o_frag[mma_q][mma_d][reg_id] * d_rcp[mma_q][(reg_id % 4) / 2];
         }
@@ -1090,8 +1090,8 @@ __device__ __forceinline__ void normalize_d(AttentionVariant variant, float (*o_
 template <uint32_t NUM_WARPS_Q, uint32_t NUM_WARPS_KV, uint32_t NUM_MMA_Q, uint32_t NUM_MMA_D,
           typename DTypeQKAccum, typename AttentionVariant>
 __device__ __forceinline__ void threadblock_sync_mdo_states(
-    AttentionVariant variant, float (*o_frag)[NUM_MMA_D][8], float* smem_workspace,
-    DTypeQKAccum (*m)[2], float (*d)[2], const uint32_t warp_idx, const uint32_t lane_idx) {
+    AttentionVariant variant, float (*o_frag)[NUM_MMA_D][4], float* smem_workspace,
+    DTypeQKAccum (*m)[1], float (*d)[1], const uint32_t warp_idx, const uint32_t lane_idx) {
   // only necessary when blockDim.z > 1
   if constexpr (NUM_WARPS_KV > 1) {
     float2* smem_md = (float2*)(smem_workspace +
@@ -1173,7 +1173,7 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
                      lane_idx) *
                         8);
 #pragma unroll
-            for (uint32_t reg_id = 0; reg_id < 8; ++reg_id) {
+            for (uint32_t reg_id = 0; reg_id < 4; ++reg_id) {
               o_new[reg_id] += oi[reg_id] * o_scale[(reg_id % 4) / 2][i];
             }
           }
@@ -1201,7 +1201,7 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
                      lane_idx) *
                         8);
 #pragma unroll
-            for (uint32_t reg_id = 0; reg_id < 8; ++reg_id) {
+            for (uint32_t reg_id = 0; reg_id < 4; ++reg_id) {
               o_new[reg_id] += oi[reg_id];
             }
           }
@@ -1215,7 +1215,7 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
 template <uint32_t NUM_WARPS_Q, uint32_t NUM_WARPS_KV, uint32_t NUM_MMA_Q, uint32_t NUM_MMA_D,
           SwizzleMode swizzle_mode, typename DTypeO>
 __device__ __forceinline__ void write_o_reg_gmem(
-    float (*o_frag)[NUM_MMA_D][8], smem_t<swizzle_mode>* o_smem, DTypeO* o_ptr_base,
+    float (*o_frag)[NUM_MMA_D][4], smem_t<swizzle_mode>* o_smem, DTypeO* o_ptr_base,
     const uint32_t o_packed_idx_base, const uint32_t qo_upper_bound, const uint32_t o_stride_n,
     const uint32_t o_stride_h, const uint_fastdiv group_size) {
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
@@ -1797,9 +1797,9 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     constexpr uint32_t channel_size_128b_out = head_dim / num_elems_per_128b<DTypeO>();
 
     DTypeQKAccum s_frag[NUM_MMA_Q][NUM_MMA_KV][4];
-    alignas(16) float o_frag[NUM_MMA_Q][NUM_MMA_D][8];
-    DTypeQKAccum m[NUM_MMA_Q][2];
-    float d[NUM_MMA_Q][2];
+    alignas(16) float o_frag[NUM_MMA_Q][NUM_MMA_D][4];
+    DTypeQKAccum m[NUM_MMA_Q][1];
+    float d[NUM_MMA_Q][1];
     float rope_freq[NUM_MMA_D / 2][4];
 
     if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
