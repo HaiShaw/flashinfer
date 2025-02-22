@@ -1065,6 +1065,59 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
     }
   }
 
+
+//swizzle s_frag_f16 to a layout that matches our mma reprudcer
+  typedef union b128_h {
+          b128_t b128;
+          __half h[8];
+          uint32_t i[4];
+          __device__ b128_h() { memset( this, 0, sizeof( b128_h ) ); }
+  };
+  b128_h b128_h_;
+  b128_h b128_h_a_frag;
+  b128_h b128_h_b_frag;
+
+#pragma unroll
+  for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
+    for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
+    if constexpr (std::is_same_v<DTypeQ, half>) {
+
+      int thrd4 = threadIdx.x%4;
+      int bnd4  = (threadIdx.x/4)*4;
+      int bnd32 = (threadIdx.y%2)*32;
+      //lanes 0-8
+      half tmp[4][8];
+      //lane 0-7
+          for (int se=0; se<8; se++)
+                tmp[0][se] = __shfl(s_frag_f16[mma_q][mma_kv][se%2],   bnd32+(threadIdx.x%32)*4+se/2);
+      //lane 8-15
+          for (int se=0; se<8; se++)
+                tmp[1][se] = __shfl(s_frag_f16[mma_q][mma_kv][se%2+2], bnd32+(threadIdx.x%32-8)*4+se/2);
+      //lane 16-23
+          for (int se=0; se<8; se++)
+                tmp[2][se] = __shfl(s_frag_f16[mma_q][mma_kv][se%2+4], bnd32+(threadIdx.x%32-16)*4+se/2);
+      //lane 24-31
+          for (int se=0; se<8; se++)
+                tmp[3][se] = __shfl(s_frag_f16[mma_q][mma_kv][se%2+6], bnd32+(threadIdx.x%32-24)*4+se/2);
+      
+      if (threadIdx.x%32 < 8)
+	      for (int se=0; se<8; se++)
+	          s_frag_f16[mma_q][mma_kv][se] = tmp[0][se];
+      else if (threadIdx.x%32 >= 8 && threadIdx.x%32<16)
+	      for (int se=0; se<8; se++)
+	          s_frag_f16[mma_q][mma_kv][se] = tmp[1][se];
+      else if (threadIdx.x%32 >= 16 && threadIdx.x%32<24)
+	      for (int se=0; se<8; se++)
+	          s_frag_f16[mma_q][mma_kv][se] = tmp[2][se];
+      else if (threadIdx.x%32 >= 24 && threadIdx.x%32<32)
+	      for (int se=0; se<8; se++)
+	          s_frag_f16[mma_q][mma_kv][se] = tmp[3][se];
+ 
+    }  
+    }
+  }
+
+
 #pragma unroll
   for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
 #pragma unroll
@@ -1096,6 +1149,36 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
 #if 0  // disable MMA on ROCm platform
         v_smem->ldmatrix_m8n8x4_trans(*v_smem_offset_r, b_frag);
 #endif // disable MMA on ROCm platform
+        b128_t* adrs = reinterpret_cast<__shared__ b128_t*>(v_smem->base + *v_smem_offset_r);
+        b128_h_b_frag.b128 = *adrs;
+
+//b_frag loaded with ldmatrix_m8n8x4_*TRANS*
+//swizzle b_frag to a layout that matches our mma reprudcer
+  int bnd32_ = (threadIdx.y%2)*32;
+  b128_h tmp[8][4];
+  for (int d=0; d<8; d++) {
+    for (int e=0; e<8; e++)
+      tmp[d][0].h[e] = __shfl(b128_h_b_frag.h[d], bnd32_+e);
+    for (int e=0; e<8; e++)
+      tmp[d][1].h[e] = __shfl(b128_h_b_frag.h[d], bnd32_+e+8);
+    for (int e=0; e<8; e++)
+      tmp[d][2].h[e] = __shfl(b128_h_b_frag.h[d], bnd32_+e+16);
+    for (int e=0; e<8; e++)
+      tmp[d][3].h[e] = __shfl(b128_h_b_frag.h[d], bnd32_+e+24);
+  }
+  if (threadIdx.x%32<8)
+	  for (int e=0; e<8; e++)
+		  b128_h_b_frag.h[e] = tmp[threadIdx.x%8][0].h[e];
+  if (threadIdx.x%32>=8 && threadIdx.x%32<16)
+	  for (int e=0; e<8; e++)
+		  b128_h_b_frag.h[e] = tmp[threadIdx.x%8][1].h[e];
+  if (threadIdx.x%32>=16 && threadIdx.x%32<24)
+	  for (int e=0; e<8; e++)
+		  b128_h_b_frag.h[e] = tmp[threadIdx.x%8][2].h[e];
+  if (threadIdx.x%32>=24 && threadIdx.x%32<32)
+	  for (int e=0; e<8; e++)
+		  b128_h_b_frag.h[e] = tmp[threadIdx.x%8][3].h[e];
+
       }
 #pragma unroll
       for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
@@ -1105,6 +1188,104 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
           mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(
               o_frag[mma_q][mma_d], (uint32_t*)(s_frag_f16[mma_q][mma_kv]), b_frag);
 #endif // disable MMA on ROCm platform
+
+
+      int bnd32 = (threadIdx.y%2)*32;
+      int bnd16 = (threadIdx.x/16)*16;
+      int bnd8 = (threadIdx.x/8)*8;
+      int thrd8 = (threadIdx.x%8);
+	    //if (mma_d == 0)
+	    //  for (int se=0; se<8; se++) 
+	    //	      (reinterpret_cast<float*>(&o_frag[mma_q][mma_d])[se]) = 0.0f;
+
+	    //replicate NVidia's ldmatrix_m8n8x4+mma_sync_m16n16k16_row_col_f16f16f16 (excl. output locations)
+            float tmp0[8] = {0,0,0,0,0,0,0,0};
+	    float tmp1[8] = {0,0,0,0,0,0,0,0};
+	    float tmp2[8] = {0,0,0,0,0,0,0,0};
+	    float tmp3[8] = {0,0,0,0,0,0,0,0};
+	    for (int se=0; se<8; se++) { 
+	    for (int ie=0; ie<8; ie++) { 
+	      //lanes:0-8
+	      tmp0[se] += 
+	         __half2float(s_frag_f16[mma_q][mma_kv][ie]) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+se);
+	      tmp0[se] +=
+	         __shfl(__half2float(s_frag_f16[mma_q][mma_kv][ie]), bnd32+bnd16+16+thrd8) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+8+se);
+
+	      //lanes:8-16
+	      tmp1[se] += 
+	         __half2float(s_frag_f16[mma_q][mma_kv][ie]) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+8+se);
+	      tmp1[se] +=
+                 __shfl(__half2float(s_frag_f16[mma_q][mma_kv][ie]), bnd32+bnd16+16+8+thrd8) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+16+se);
+
+	      //lanes:16-24
+	      tmp2[se] += 
+	         __shfl(__half2float(s_frag_f16[mma_q][mma_kv][ie]), bnd32+threadIdx.x-16) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+se);
+	      tmp2[se] +=
+                 __half2float(s_frag_f16[mma_q][mma_kv][ie]) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8+8+se);
+
+	      //lanes:24-32
+	      tmp3[se] += 
+	         __shfl(__half2float(s_frag_f16[mma_q][mma_kv][ie]), bnd32+threadIdx.x-16) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8-24+se);
+	      tmp3[se] +=
+                 __half2float(s_frag_f16[mma_q][mma_kv][ie]) * 
+	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8-16+se);
+
+	    }
+	    }
+
+	    float tmp4[8];
+	    for (int se=0; se<8; se++) { 
+	      if ((threadIdx.x%32 >=0) && (threadIdx.x%32 < 8))
+                 tmp4[se] = tmp0[se]; 
+	      else if ((threadIdx.x%32 >=8) && (threadIdx.x%32 < 16))
+                 tmp4[se] = tmp1[se]; 
+	      else if ((threadIdx.x%32 >=16) && (threadIdx.x%32 < 24))
+                 tmp4[se] = tmp2[se]; 
+	      else if ((threadIdx.x%32 >=24) && (threadIdx.x%32 < 32))
+                 tmp4[se] = tmp3[se]; 
+	    }
+
+	    int thrd4 = threadIdx.x%4;
+	    for (int se=0; se<2; se++) { 
+		float tmp[4];
+                tmp[0] = __shfl(tmp4[se+0*2], bnd32+threadIdx.x/4);
+                tmp[1] = __shfl(tmp4[se+1*2], bnd32+threadIdx.x/4);
+                tmp[2] = __shfl(tmp4[se+2*2], bnd32+threadIdx.x/4);
+                tmp[3] = __shfl(tmp4[se+3*2], bnd32+threadIdx.x/4);
+                (reinterpret_cast<float*>(&o_frag[mma_q][mma_d])[se]) += tmp[thrd4];
+	    }
+	    for (int se=2; se<4; se++) { 
+		float tmp[4];
+                tmp[0] = __shfl(tmp4[se+0*2-2], bnd32+24+threadIdx.x/4);
+                tmp[1] = __shfl(tmp4[se+1*2-2], bnd32+24+threadIdx.x/4);
+                tmp[2] = __shfl(tmp4[se+2*2-2], bnd32+24+threadIdx.x/4);
+                tmp[3] = __shfl(tmp4[se+3*2-2], bnd32+24+threadIdx.x/4);
+                (reinterpret_cast<float*>(&o_frag[mma_q][mma_d])[se]) += tmp[thrd4];
+	    }
+	    for (int se=4; se<6; se++) { 
+		float tmp[4];
+                tmp[0] = __shfl(tmp4[se+0*2-4], bnd32+16+threadIdx.x/4);
+                tmp[1] = __shfl(tmp4[se+1*2-4], bnd32+16+threadIdx.x/4);
+                tmp[2] = __shfl(tmp4[se+2*2-4], bnd32+16+threadIdx.x/4);
+                tmp[3] = __shfl(tmp4[se+3*2-4], bnd32+16+threadIdx.x/4);
+                (reinterpret_cast<float*>(&o_frag[mma_q][mma_d])[se]) += tmp[thrd4];
+	    }
+	    for (int se=6; se<8; se++) { 
+		float tmp[4];
+                tmp[0] = __shfl(tmp4[se+0*2-6], bnd32+8+threadIdx.x/4);
+                tmp[1] = __shfl(tmp4[se+1*2-6], bnd32+8+threadIdx.x/4);
+                tmp[2] = __shfl(tmp4[se+2*2-6], bnd32+8+threadIdx.x/4);
+                tmp[3] = __shfl(tmp4[se+3*2-6], bnd32+8+threadIdx.x/4);
+                (reinterpret_cast<float*>(&o_frag[mma_q][mma_d])[se]) += tmp[thrd4];
+	    }
+
         } else {
 //FIXME
 #if 0  // disable MMA on ROCm platform
