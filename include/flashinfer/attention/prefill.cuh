@@ -1052,8 +1052,8 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
                  __shfl(s_frag[mma_q][mma_kv][6], bnd32+thrd4+3) +
                  __shfl(s_frag[mma_q][mma_kv][7], bnd32+thrd4+3);
 
-                 d[mma_q][0] = rwsm0;
-                 d[mma_q][1] = rwsm1;
+                 d[mma_q][0] += rwsm0;
+                 d[mma_q][1] += rwsm1;
 
         } else {
 //FIXME
