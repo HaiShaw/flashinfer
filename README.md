@@ -1,6 +1,10 @@
 **CLONE:** git clone https://github.com/HaiShaw/flashinfer.git **--recursive**
 
-**BUILD:** PYTORCH_ROCM_ARCH="native gfx90a gfx940 gfx941 gfx942" FLASHINFER_ENABLE_AOT=1 FLASHINFER_ENABLE_SM90=0 pip install --no-build-isolation --verbose --editable .
+**BUILD:** 
+rm /root/.cache/flashinfer  -r -f
+git checkout flashinfer/jit/aot_config.py
+PYTORCH_ROCM_ARCH="native gfx90a gfx940 gfx941 gfx942" FLASHINFER_ENABLE_AOT=1 FLASHINFER_ENABLE_SM90=0 python setup.py develop
+PYTORCH_ROCM_ARCH="native gfx90a gfx940 gfx941 gfx942" FLASHINFER_ENABLE_AOT=1 FLASHINFER_ENABLE_SM90=0 pip install --no-build-isolation --verbose --editable .
 
 **RUN:** pytest -sv tests/trmd_test_batch_prefill_kernels.py
 
