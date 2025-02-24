@@ -1258,8 +1258,10 @@ __device__ __forceinline__ void write_o_reg_gmem(
   constexpr uint32_t channel_size_128b_out = head_dim / num_elems_per_128b<DTypeO>();
   const uint32_t warp_idx_x = get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>();
   const uint32_t lane_idx = threadIdx.x;
+  const uint32_t real_lane_idx = threadIdx.x;
 
   if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0) {
+#if 0 // TODO: use shared memory here to enable 128bit global memory coalesce writing
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
@@ -1288,26 +1290,31 @@ __device__ __forceinline__ void write_o_reg_gmem(
 
     uint32_t o_smem_offset_w = o_smem->template get_permuted_offset<channel_size_128b_out>(
         warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8);
-
+#endif
+    // FIXME: use more efficient way to write o_frag. for now, we are using its register layout.
+    //        to change the layout, make sure we also update the o_ptr_base arg.
+    DTypeO o_frag_f16[NUM_MMA_Q][NUM_MMA_D][4];
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
-      for (uint32_t j = 0; j < 4; ++j) {
-        uint32_t q, r;
-        group_size.divmod(o_packed_idx_base + lane_idx / 8 + mma_q * 16 + j * 4, q, r);
-        const uint32_t o_idx = q;
-        DTypeO* o_ptr = o_ptr_base + q * o_stride_n + r * o_stride_h;
+      for (uint32_t mma_do = 0; mma_do < NUM_MMA_D; ++mma_do) {
+        if constexpr(std::is_same<DTypeO, __half>::value)
+          vec_cast<__half, float>::cast<4>(o_frag_f16[mma_q][mma_do], o_frag[mma_q][mma_do]);
+      }
+    }
+
 #pragma unroll
-        for (uint32_t mma_do = 0; mma_do < NUM_MMA_D / 4; ++mma_do) {
-          if (o_idx < qo_upper_bound) {
-            o_smem->store_128b(o_smem_offset_w, o_ptr);
-          }
-          o_ptr += 8 * num_elems_per_128b<DTypeO>();
-          o_smem_offset_w = o_smem->template advance_offset_by_column<8>(o_smem_offset_w, mma_do);
+    for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
+      uint32_t q, r;
+      group_size.divmod(o_packed_idx_base + real_lane_idx % 16 + mma_q * 16, q, r);
+      const uint32_t o_idx = q;
+      DTypeO* o_ptr = o_ptr_base + q * o_stride_n + r * o_stride_h;
+#pragma unroll
+      for (uint32_t mma_do = 0; mma_do < NUM_MMA_D; ++mma_do) {
+        if (o_idx < qo_upper_bound) {
+          memcpy(o_ptr, &o_frag_f16[mma_q][mma_do], sizeof(**o_frag_f16));
         }
-        o_smem_offset_w =
-            o_smem->template advance_offset_by_row<4, channel_size_128b_out>(o_smem_offset_w) -
-            2 * NUM_MMA_D;
+        o_ptr += 16;
       }
     }
   }
@@ -1861,10 +1868,10 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     DTypeO* o_ptr_base =
         partition_kv ? o + kv_tile_idx * num_qo_heads * head_dim +
                            get_elem_offset_impl(o_indptr[request_idx], kv_head_idx * group_size,
-                                                (lane_idx % 8) * num_elems_per_128b<DTypeO>(),
+                                                real_lane_idx / 16 * 4,
                                                 num_qo_heads * head_dim, head_dim)
                      : o + get_elem_offset_impl(o_indptr[request_idx], kv_head_idx * group_size,
-                                                (lane_idx % 8) * num_elems_per_128b<DTypeO>(),
+                                                real_lane_idx / 16 * 4,
                                                 num_qo_heads * head_dim, head_dim);
     uint32_t q_smem_offset_r = qo_smem.get_permuted_offset<channel_size_128b_q>(
         get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_Q * 16 + lane_idx % 16,
