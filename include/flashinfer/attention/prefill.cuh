@@ -2069,7 +2069,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
 #pragma unroll
             for (uint32_t j = 0; j < 1; ++j) {
               uint32_t q, r;
-              group_size.divmod(qo_packed_idx_base + lane_idx / 4 + j * 8 + mma_q * 16, q, r);
+              group_size.divmod(qo_packed_idx_base + real_lane_idx % 16 + mma_q * 16, q, r);
               const uint32_t qo_head_idx = kv_head_idx * group_size + r;
               const uint32_t qo_idx = q;
               if (qo_idx < qo_upper_bound) {
