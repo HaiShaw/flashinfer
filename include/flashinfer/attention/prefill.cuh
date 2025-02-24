@@ -1788,10 +1788,13 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     const __grid_constant__ typename AttentionVariant::ParamsT params) {
 #endif
   using DTypeQ = typename AttentionVariant::DTypeQ;
-#if (__CUDA_ARCH__ < 800)
-  if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
-    FLASHINFER_RUNTIME_ASSERT("Prefill kernels do not support bf16 on sm75.");
-  } else {
+
+#if !(defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__))
+  #if (__CUDA_ARCH__ < 800)
+    if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
+      FLASHINFER_RUNTIME_ASSERT("Prefill kernels do not support bf16 on sm75.");
+    } else {
+  #endif
 #endif
     using DTypeKV = typename AttentionVariant::DTypeKV;
     using DTypeO = typename AttentionVariant::DTypeO;
@@ -2086,8 +2089,10 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     }
 if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && blockIdx.y==0)
     printf("hello5!");
-#if (__CUDA_ARCH__ < 800)
-  }
+#if !(defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__))
+  #if (__CUDA_ARCH__ < 800)
+    }
+  #endif
 #endif
 }
 
