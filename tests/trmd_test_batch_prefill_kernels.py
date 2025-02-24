@@ -50,17 +50,17 @@ def warmup_jit():
 
 
 @pytest.mark.parametrize("batch_size", [12, 17])
-@pytest.mark.parametrize("kv_len", [54])
-@pytest.mark.parametrize("qo_len", [37])
-@pytest.mark.parametrize("page_size", [1])
+@pytest.mark.parametrize("kv_len", [264, 520])
+@pytest.mark.parametrize("qo_len", [37, 17])
+@pytest.mark.parametrize("page_size", [1, 16])
 @pytest.mark.parametrize("num_kv_heads", [4])
 @pytest.mark.parametrize("num_qo_heads", [4])
-@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("head_dim", [64, 128])
 @pytest.mark.parametrize("causal", [False])
-@pytest.mark.parametrize("kv_layout", ["HND"])
+@pytest.mark.parametrize("kv_layout", ["HND", "NHD"])
 @pytest.mark.parametrize("pos_encoding_mode", ["NONE"])
 @pytest.mark.parametrize("use_cuda_graph", [False])
-@pytest.mark.parametrize("logits_soft_cap", [0.0])
+@pytest.mark.parametrize("logits_soft_cap", [0.0, 30.0])
 @pytest.mark.parametrize("return_lse", [False])
 @pytest.mark.parametrize("contiguous_kv", [True])
 def test_batch_prefill_with_paged_kv_cache(
@@ -263,10 +263,9 @@ def test_batch_prefill_with_paged_kv_cache(
         assert num_kv_heads == num_qo_heads
         assert not causal
         assert pos_encoding_mode == 'NONE'
-        assert logits_soft_cap == 0.0
         assert not return_lse
 
-        o_ref_i = alibi_attention(qi, ki, vi)
+        o_ref_i = alibi_attention(qi, ki, vi, None, logits_soft_cap)
         o_i = o[q_indptr_cpu[i] : q_indptr_cpu[i + 1]]
         torch.testing.assert_close(o_i, o_ref_i, rtol=1e-3, atol=1e-3)
 
