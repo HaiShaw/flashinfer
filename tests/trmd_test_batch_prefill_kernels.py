@@ -63,6 +63,7 @@ def warmup_jit():
 @pytest.mark.parametrize("logits_soft_cap", [0.0, 30.0])
 @pytest.mark.parametrize("return_lse", [False])
 @pytest.mark.parametrize("contiguous_kv", [True])
+@pytest.mark.parametrize("dtype", [torch.float16])
 def test_batch_prefill_with_paged_kv_cache(
     batch_size,
     kv_len,
@@ -78,8 +79,9 @@ def test_batch_prefill_with_paged_kv_cache(
     logits_soft_cap,
     return_lse,
     contiguous_kv,
+    dtype,
 ):
-    q = torch.randn(batch_size * qo_len, num_qo_heads, head_dim).half().to(0)
+    q = torch.randn(batch_size * qo_len, num_qo_heads, head_dim).to(dtype).to(0)
     q_indptr_cpu = torch.arange(0, batch_size + 1).int() * qo_len
     num_pages_per_seq = (kv_len + page_size - 1) // page_size
     total_num_pages = num_pages_per_seq * batch_size
@@ -94,7 +96,7 @@ def test_batch_prefill_with_paged_kv_cache(
             tmp.append(v)
         kv_shape = tmp
         kv_data_fp32 = torch.randn(*kv_shape, dtype=torch.float32).to(0)
-        kv_data = kv_data_fp32.half()
+        kv_data = kv_data_fp32.to(dtype)
         kv_data = kv_data[:, 1, :, 1, :, 1, :, 1, :]
         kv_data_fp32 = kv_data_fp32[:, 1, :, 1, :, 1, :, 1, :]
         # actual data is stored in non-contiguous memory
@@ -104,7 +106,7 @@ def test_batch_prefill_with_paged_kv_cache(
         )
     else:
         kv_data_fp32 = torch.randn(*kv_shape, dtype=torch.float32).to(0)
-        kv_data = kv_data_fp32.half()
+        kv_data = kv_data_fp32.to(dtype)
     kv_indptr_cpu = torch.arange(0, batch_size + 1).int() * num_pages_per_seq
     kv_indices_cpu = torch.arange(0, total_num_pages).int()
     kv_last_page_len_cpu = torch.full(
@@ -132,6 +134,7 @@ def test_batch_prefill_with_paged_kv_cache(
             causal=causal,
             pos_encoding_mode=pos_encoding_mode,
             logits_soft_cap=logits_soft_cap,
+            q_data_type=dtype
         )
         if return_lse:
             o, _ = wrapper.run(q, kv_data, return_lse=True)
@@ -228,7 +231,7 @@ def test_batch_prefill_with_paged_kv_cache(
                 .reshape(-1, num_kv_heads, head_dim),
             ],
             dim=0,
-        ).half()
+        ).to(dtype)
         vi = torch.cat(
             [
                 kv_data_fp32[kv_indptr_cpu[i] : kv_indptr_cpu[i + 1] - 1, 1]
@@ -247,7 +250,7 @@ def test_batch_prefill_with_paged_kv_cache(
                 .reshape(-1, num_kv_heads, head_dim),
             ],
             dim=0,
-        ).half()
+        ).to(dtype)
         # FIXME: add back single_prefill_with_kv_cache() call after finish implementation
         """
         o_ref_i = flashinfer.prefill.single_prefill_with_kv_cache(
