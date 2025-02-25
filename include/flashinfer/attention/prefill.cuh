@@ -2087,8 +2087,6 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
         }
       }
     }
-if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && blockIdx.y==0)
-    printf("hello5!");
 #if !(defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__))
   #if (__CUDA_ARCH__ < 800)
     }
@@ -2204,8 +2202,6 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
                                                   float* tmp_s, gpuStream_t stream) {
   using DTypeQ = typename AttentionVariant::DTypeQ;
   using DTypeKV = typename AttentionVariant::DTypeKV;
-  using DTypeO = typename AttentionVariant::DTypeO;
-  printf("\nDTYPS:<<<<%s,%s,%s>>>>>>>\n", typeid(DTypeQ).name(), typeid(DTypeKV).name(), typeid(DTypeO).name());
   const uint32_t padded_batch_size = params.padded_batch_size;
   const uint32_t num_qo_heads = params.num_qo_heads;
   const uint32_t num_kv_heads = params.paged_kv.num_heads;
