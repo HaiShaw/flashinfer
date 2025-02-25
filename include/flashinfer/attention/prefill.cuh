@@ -85,10 +85,57 @@ using mma::MMAMode;
 constexpr uint32_t WARP_SIZE = 64;
 constexpr uint32_t CUDA_WARP_SIZE = 32;
 
-using fp16_t = _Float16;
-using fp16x4_t = fp16_t __attribute__((ext_vector_type(4)));
-using fp32_t = float;
-using fp32x4_t = fp32_t __attribute__((ext_vector_type(4)));
+using B16_t = uint16_t;
+using B16x4_t = B16_t __attribute__((ext_vector_type(4)));
+using B32_t = uint32_t;
+using B32x4_t = B32_t __attribute__((ext_vector_type(4)));
+
+template <typename DType>
+struct mfma_m16n16k16_f32
+{
+  static_assert(sizeof(DType) == 1);
+
+  using ab_fragment_type = B16x4_t;
+  using c_fragment_type = B32x4_t;
+
+  static __device__ __forceinline__ c_fragment_type run(
+    ab_fragment_type,
+    ab_fragment_type,
+    c_fragment_type
+  ) {
+    return c_fragment_type{};
+  }
+};
+
+template <>
+struct mfma_m16n16k16_f32<__half>
+{
+  using ab_fragment_type = B16x4_t;
+  using c_fragment_type = B32x4_t;
+
+  static __device__ __forceinline__ c_fragment_type run(
+    ab_fragment_type a,
+    ab_fragment_type b,
+    c_fragment_type c
+  ) {
+    return __builtin_amdgcn_mfma_f32_16x16x16f16(a, b, c, 0, 0, 0);
+  }
+};
+
+template <>
+struct mfma_m16n16k16_f32<__hip_bfloat16>
+{
+  using ab_fragment_type = B16x4_t;
+  using c_fragment_type = B32x4_t;
+
+  static __device__ __forceinline__ c_fragment_type run(
+    ab_fragment_type a,
+    ab_fragment_type b,
+    c_fragment_type c
+  ) {
+    return __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(a, b, c, 0, 0, 0);
+  }
+};
 
 constexpr uint32_t get_num_warps_q(const uint32_t cta_tile_q) {
   if (cta_tile_q > 16) {
@@ -643,9 +690,12 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 
   const uint32_t real_lane_idx = threadIdx.x;
 
-  fp16x4_t a_frag[NUM_MMA_Q];                     // TODO: choose proper type by given DTypeQ & DTypeKV
-  fp16x4_t b_frag;                                // TODO: choose proper type by given DTypeQ & DTypeKV
-  fp32x4_t s_frag_compute[NUM_MMA_Q][NUM_MMA_KV]; // TODO: choose proper type by given DTypeQ & DTypeKV
+  using ab_frag_type = typename mfma_m16n16k16_f32<DTypeQ>::ab_fragment_type;
+  using c_frag_type = typename mfma_m16n16k16_f32<DTypeQ>::c_fragment_type;
+
+  ab_frag_type a_frag[NUM_MMA_Q];
+  ab_frag_type b_frag;
+  c_frag_type s_frag_compute[NUM_MMA_Q][NUM_MMA_KV];
 
   // compute q*k^T
 #pragma unroll
@@ -658,8 +708,8 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 #else
       // thread 0 read first 4 elements, thread 16 read last 4 elements, etc...
       auto* values = reinterpret_cast<unsigned char*>(q_smem->base + *q_smem_offset_r) \
-         + sizeof(fp16x4_t) * (real_lane_idx / 16 % 2);
-      memcpy(a_frag + mma_q, values, sizeof(fp16x4_t));
+         + sizeof(ab_frag_type) * (real_lane_idx / 16 % 2);
+      memcpy(a_frag + mma_q, values, sizeof(ab_frag_type));
 #endif // disable MMA on ROCm platform
       *q_smem_offset_r =
           q_smem->template advance_offset_by_row<16, channel_size_128b_q>(*q_smem_offset_r);
@@ -697,8 +747,8 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 #else
         // thread 0 read first 4 elements, thread 16 read last 4 elements, etc...
         auto* values = reinterpret_cast<unsigned char*>(k_smem->base + *k_smem_offset_r) \
-          + sizeof(fp16x4_t) * (real_lane_idx / 16 % 2);
-        memcpy(&b_frag, values, sizeof(fp16x4_t));
+          + sizeof(ab_frag_type) * (real_lane_idx / 16 % 2);
+        memcpy(&b_frag, values, sizeof(ab_frag_type));
 #endif // disable MMA on ROCm platform
       }
       *k_smem_offset_r =
@@ -713,7 +763,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
             mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ, MMAMode::kInit>(
                 s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
 #else
-            s_frag_compute[mma_q][mma_kv] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag, a_frag[mma_q], fp32x4_t{0.f}, 0, 0, 0);
+            s_frag_compute[mma_q][mma_kv] = mfma_m16n16k16_f32<DTypeQ>::run(b_frag, a_frag[mma_q], c_frag_type{});
 #endif // disable MMA on ROCm platform
           } else {
 //FIXME
@@ -721,7 +771,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
             mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(s_frag[mma_q][mma_kv], a_frag[mma_q],
                                                               b_frag);
 #else
-            s_frag_compute[mma_q][mma_kv] = __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag, a_frag[mma_q], s_frag_compute[mma_q][mma_kv], 0, 0, 0);
+            s_frag_compute[mma_q][mma_kv] = mfma_m16n16k16_f32<DTypeQ>::run(b_frag, a_frag[mma_q], s_frag_compute[mma_q][mma_kv]);
 #endif // disable MMA on ROCm platform
           }
         } else if (std::is_same_v<DTypeQKAccum, half>) {
@@ -966,8 +1016,7 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
       for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
         //vec_cast<DTypeQ, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
 //hipFIXED
-        if constexpr(std::is_same<DTypeQ, __half>::value)
-        vec_cast<__half, float>::cast<4>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
+        vec_cast<DTypeQ, float>::template cast<4>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
       }
     }
   }
@@ -1001,11 +1050,14 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
     }
   }
 
+  using ab_frag_type = typename mfma_m16n16k16_f32<DTypeKV>::ab_fragment_type;
+  using c_frag_type = typename mfma_m16n16k16_f32<DTypeKV>::c_fragment_type;
+
 #pragma unroll
   for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
 #pragma unroll
     for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
-      fp16x4_t b_frag;
+      ab_frag_type b_frag;
       if constexpr (sizeof(DTypeKV) == 1) {
         uint32_t b_frag_f8[2];
         if (mma_d % 2 == 0) {
@@ -1038,7 +1090,7 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
           uint32_t offset = v_smem->template get_permuted_offset<channel_size_128b_kv>(i + elem, j);
           data[elem] = reinterpret_cast<DTypeKV*>(v_smem->base + offset)[real_lane_idx % 8];
         }
-        memcpy(&b_frag, data, sizeof(fp16x4_t));
+        memcpy(&b_frag, data, sizeof(ab_frag_type));
 #endif // disable MMA on ROCm platform
       }
 #pragma unroll
@@ -1049,10 +1101,10 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
           mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(
               o_frag[mma_q][mma_d], (uint32_t*)(s_frag_f16[mma_q][mma_kv]), b_frag);
 #else
-          *(fp32x4_t*)(o_frag[mma_q][mma_d]) = 
-            __builtin_amdgcn_mfma_f32_16x16x16f16(b_frag, 
-              *(fp16x4_t*)(s_frag_f16[mma_q][mma_kv]), 
-              *(fp32x4_t*)(o_frag[mma_q][mma_d]), 0, 0, 0);
+          *(c_frag_type*)(o_frag[mma_q][mma_d]) = 
+            mfma_m16n16k16_f32<DTypeKV>::run(b_frag, 
+              *(ab_frag_type*)(s_frag_f16[mma_q][mma_kv]), 
+              *(c_frag_type*)(o_frag[mma_q][mma_d]));
 #endif // disable MMA on ROCm platform
         } else {
 //FIXME
@@ -1298,8 +1350,7 @@ __device__ __forceinline__ void write_o_reg_gmem(
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
       for (uint32_t mma_do = 0; mma_do < NUM_MMA_D; ++mma_do) {
-        if constexpr(std::is_same<DTypeO, __half>::value)
-          vec_cast<__half, float>::cast<4>(o_frag_f16[mma_q][mma_do], o_frag[mma_q][mma_do]);
+        vec_cast<DTypeO, float>::template cast<4>(o_frag_f16[mma_q][mma_do], o_frag[mma_q][mma_do]);
       }
     }
 
@@ -1921,7 +1972,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
                  real_lane_idx / 16 / 2),
              v_smem_offset_r = v_smem.template get_permuted_offset<channel_size_128b_kv>(
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
-                 lane_idx / 16),
+                 real_lane_idx / 16 / 2),
              kv_smem_offset_w = k_smem.template get_permuted_offset<channel_size_128b_kv>(
                  warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);
     const IdType last_indptr = paged_kv.indptr[paged_kv.batch_size];

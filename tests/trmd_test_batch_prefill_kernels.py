@@ -63,7 +63,7 @@ def warmup_jit():
 @pytest.mark.parametrize("logits_soft_cap", [0.0, 30.0])
 @pytest.mark.parametrize("return_lse", [False])
 @pytest.mark.parametrize("contiguous_kv", [True])
-@pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_batch_prefill_with_paged_kv_cache(
     batch_size,
     kv_len,
@@ -268,9 +268,12 @@ def test_batch_prefill_with_paged_kv_cache(
         assert pos_encoding_mode == 'NONE'
         assert not return_lse
 
+        rtol = 1e-3 if dtype == torch.float16 else 1e-2
+        atol = 1e-3 if dtype == torch.float16 else 1e-2 
+
         o_ref_i = alibi_attention(qi, ki, vi, None, logits_soft_cap)
         o_i = o[q_indptr_cpu[i] : q_indptr_cpu[i + 1]]
-        torch.testing.assert_close(o_i, o_ref_i, rtol=1e-3, atol=1e-3)
+        torch.testing.assert_close(o_i, o_ref_i, rtol=rtol, atol=atol)
 
 '''
 @pytest.mark.parametrize("batch_size", [12, 17])
