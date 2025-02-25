@@ -654,13 +654,27 @@ def get_aiter_decode_uri(*,
     )
 
 
+_aiter_default_kwargs = {
+    'dtype_q': torch.float16,
+    'dtype_kv': torch.float16,
+    'block_size': 1,
+    'head_size': 128,
+    'dtype_o': torch.float16,
+    'alibi_enabled': True,
+    'logits_soft_cap_enabled': True,
+    'gqa_ratio': 1,
+}
+
+
 def gen_aiter_decode_module(**kwargs):
-    from .aiter_decode_templ import suffix_template_dict, _FUNC_NAME, _FUNC_ARGS
+    from .aiter_decode_templ import suffix_template_dict, _FUNC_NAME, _FUNC_ARGS, _PAGED_ATTN_SRC, _REDUCE_SRC
     gen_directory = FLASHINFER_GEN_SRC_DIR
     uri = get_aiter_decode_uri(**kwargs)
     template_kwargs = {
         'func_name': _FUNC_NAME,
         'func_args': _FUNC_ARGS,
+        'paged_attn_kernel': _PAGED_ATTN_SRC,
+        'reduce_kernel': _REDUCE_SRC,
         'query_dtype': dtype_map[kwargs["dtype_q"]],
         'key_value_dtype': dtype_map[kwargs["dtype_kv"]],
         # 'kvcache_dtype': kwargs["dtype_kv"],
