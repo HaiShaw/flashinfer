@@ -16,16 +16,15 @@
 #ifndef FLASHINFER_UTILS_CUH_
 #define FLASHINFER_UTILS_CUH_
 
+#include "./gpu_defines_cuda_hip.h"
 
 #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
-#include "./gpu_defines_hip_hip.h"
 
 #include <hip/hip_bf16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_fp8.h>
 #include <hip/hip_runtime.h>
 #elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
-#include "./gpu_defines_cuda_hip.h"
 
 #include <cuda_bf16.h>
 #include <cuda_device_runtime_api.h>
@@ -47,6 +46,11 @@
 // macro to turn off fp16 qk reduction to reduce binary
 #ifndef FLASHINFER_ALWAYS_DISALLOW_FP16_QK_REDUCTION
 #define FLASHINFER_ALWAYS_DISALLOW_FP16_QK_REDUCTION 0
+#endif
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+static constexpr int MAX_STAGES_SMEM = 1;
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
+static constexpr int MAX_STAGES_SMEM = 2;
 #endif
 
 #ifndef NDEBUG
@@ -145,6 +149,9 @@
     __VA_ARGS__                                              \
   } else if (group_size == 4) {                              \
     constexpr size_t GROUP_SIZE = 4;                         \
+    __VA_ARGS__                                              \
+  } else if (group_size == 6) {                              \
+    constexpr size_t GROUP_SIZE = 6;                         \
     __VA_ARGS__                                              \
   } else if (group_size == 8) {                              \
     constexpr size_t GROUP_SIZE = 8;                         \
@@ -268,7 +275,7 @@
 
 #define DISPATCH_COMPUTE_CAP_DECODE_NUM_STAGES_SMEM(compute_capacity, NUM_STAGES_SMEM, ...) \
   if (compute_capacity.first >= 8) {                                                        \
-    constexpr uint32_t NUM_STAGES_SMEM = 2;                                                 \
+    constexpr uint32_t NUM_STAGES_SMEM = MAX_STAGES_SMEM;                                                 \
     __VA_ARGS__                                                                             \
   } else {                                                                                  \
     constexpr uint32_t NUM_STAGES_SMEM = 1;                                                 \
