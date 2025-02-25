@@ -661,15 +661,15 @@ def gen_aiter_decode_module(**kwargs):
     template_kwargs = {
         'func_name': _FUNC_NAME,
         'func_args': _FUNC_ARGS,
-        'query_dtype': kwargs["dtype_q"],
-        'key_value_dtype': kwargs["dtype_kv"],
-        'kvcache_dtype': kwargs["dtype_kv"],
+        'query_dtype': dtype_map[kwargs["dtype_q"]],
+        'key_value_dtype': dtype_map[kwargs["dtype_kv"]],
+        # 'kvcache_dtype': kwargs["dtype_kv"],
         'block_size': kwargs["block_size"],
         'head_size': kwargs["head_size"],
-        'out_dtype': kwargs["dtype_o"],
-        'partition_size_old': kwargs["partition_size_old"],
+        'out_dtype': dtype_map[kwargs["dtype_o"]],
         'alibi_enabled': int(kwargs["alibi_enabled"]),
         'logits_soft_cap_enabled': int(kwargs["logits_soft_cap_enabled"]),
+        'gqa_ratio': int(kwargs["gqa_ratio"])
     }
     paths_sources = [
         ((gen_directory / f"{uri}{suffix}"), jinja2.Template(template).render(*template_kwargs))
