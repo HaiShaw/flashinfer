@@ -1,9 +1,8 @@
 # TODO: license header
-suffix_source_dict = {
-    '.hip': r"""// generated with aiter_decode_templ.py
-#include "pytorch_extension_utils.h"
 
-void {{kernel_name}}(
+_FUNC_NAME = "paged_attention"
+
+_FUNC_ARGS = r"""
     torch::Tensor& out, // [num_seqs, num_heads, head_size]
     torch::Tensor& workspace_buffer,
     torch::Tensor& query,       // [num_seqs, num_heads, head_size]
@@ -24,8 +23,14 @@ void {{kernel_name}}(
     torch::Tensor& k_scale,
     torch::Tensor& v_scale,
     const c10::optional<torch::Tensor>& fp8_out_scale,
-    int64_t partition_size) {
+    int64_t partition_size
+"""
 
+suffix_template_dict = {
+    '.hip': r"""// generated with aiter_decode_templ.py
+#include "pytorch_extension_utils.h"
+
+void {{func_name}}({{func_args}}) {
     paged_attention_custom_launcher<
         {{query_dtype}},
         {{key_value_dtype}},
@@ -58,31 +63,10 @@ void {{kernel_name}}(
     '_pybind.cc': r"""// generated with aiter_decode_templ.py
 #include "pytorch_extension_utils.h"
 
-void {{kernel_name}}(
-    torch::Tensor& out, // [num_seqs, num_heads, head_size]
-    torch::Tensor& workspace_buffer,
-    torch::Tensor& query,       // [num_seqs, num_heads, head_size]
-    torch::Tensor& key_cache,   // [num_blocks, num_heads, block_size, head_size] or
-                                // [num_blocks, block_size, num_heads, head_size]
-    torch::Tensor& value_cache, // [num_blocks, num_heads, block_size, head_size] or
-                                // [num_blocks, block_size, num_heads, head_size]
-    double scale,
-    torch::Tensor& kv_indptr,         // [num_seqs + 1]
-    torch::Tensor& kv_page_indices,   // [max_num_blocks]
-    std::optional<torch::Tensor>& kv_last_page_lens, // [num_seqs]
-    int64_t block_size,
-    int64_t max_num_partitions,
-    const std::optional<torch::Tensor>& alibi_slopes,
-    const std::string& kv_cache_dtype,
-    const std::string& kv_cache_layout,
-    float logits_soft_cap,
-    torch::Tensor& k_scale,
-    torch::Tensor& v_scale,
-    const c10::optional<torch::Tensor>& fp8_out_scale,
-    int64_t partition_size);
+void {{func_name}}({{func_args}});
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("run", &{{kernel_name}},
+  m.def("run", &{{func_name}},
         "AITER paged attention");
 """,
 }

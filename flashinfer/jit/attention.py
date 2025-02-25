@@ -632,3 +632,49 @@ def gen_customize_single_prefill_module(module_name, *args):
         write_if_different(path, source)
 
     return load_cuda_ops(module_name, source_paths)
+
+
+def get_aiter_decode_uri(*,
+                         dtype_q: torch.dtype,
+                         dtype_kv: torch.dtype,
+                         dtype_o: torch.dtype,
+                         # dtype_idx: torch.dtype,
+                         head_dim: int,
+                         # pos_encoding_mode: int,
+                         # use_sliding_window: bool,
+                         # use_logits_soft_cap: bool,
+                         # use_fp16_qk_reduction: bool,
+                         ):
+    return (
+        f"aiter_decode_"
+        f"dtype_q_{filename_safe_dtype_map[dtype_q]}_"
+        f"dtype_kv_{filename_safe_dtype_map[dtype_kv]}_"
+        f"dtype_o_{filename_safe_dtype_map[dtype_o]}_"
+        f"head_dim_{head_dim}_"
+    )
+
+
+def gen_aiter_decode_module(**kwargs):
+    from .aiter_decode_templ import suffix_template_dict, _FUNC_NAME, _FUNC_ARGS
+    gen_directory = FLASHINFER_GEN_SRC_DIR
+    uri = get_aiter_decode_uri(**kwargs)
+    template_kwargs = {
+        'func_name': _FUNC_NAME,
+        'func_args': _FUNC_ARGS,
+        'query_dtype': kwargs["dtype_q"],
+        'key_value_dtype': kwargs["dtype_kv"],
+        'kvcache_dtype': kwargs["dtype_kv"],
+        'block_size': kwargs["block_size"],
+        'head_size': kwargs["head_size"],
+        'out_dtype': kwargs["dtype_o"],
+        'partition_size_old': kwargs["partition_size_old"],
+        'alibi_enabled': int(kwargs["alibi_enabled"]),
+        'logits_soft_cap_enabled': int(kwargs["logits_soft_cap_enabled"]),
+    }
+    paths_sources = [
+        ((gen_directory / f"{uri}{suffix}"), jinja2.Template(template).render(*template_kwargs))
+        for suffix, template in suffix_template_dict.items()
+    ]
+    for path, source in paths_sources:
+        write_if_different(path, source)
+    return load_cuda_ops(uri, [source for _, source in paths_sources], verbose=True)
