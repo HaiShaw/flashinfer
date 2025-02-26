@@ -69,12 +69,12 @@ typedef struct _B8x16
 using floatx4   = __attribute__((__vector_size__(4 * sizeof(float)))) float;
 
 template <typename T>
-__device__ __forceinline__ T loadnt(T* addr)
+DEVICE_IF_HIPCC __forceinline__ T loadnt(T* addr)
 {
     return __builtin_nontemporal_load(addr);
 }
 
-__device__ __forceinline__ _B16x8 load_ntmprl_16Byte(const _B16x8* addr)
+DEVICE_IF_HIPCC __forceinline__ _B16x8 load_ntmprl_16Byte(const _B16x8* addr)
 {
     auto addr_alias = reinterpret_cast<const float*>(addr);
     auto dat0       = loadnt(addr_alias);
@@ -86,7 +86,7 @@ __device__ __forceinline__ _B16x8 load_ntmprl_16Byte(const _B16x8* addr)
 }
 
 template <typename T, int absz, int cbid, int blgp>
-__device__ __forceinline__ floatx4 gcn_mfma16x16x16_instr(const _B16x4& inpA,
+DEVICE_IF_HIPCC __forceinline__ floatx4 gcn_mfma16x16x16_instr(const _B16x4& inpA,
                                                           const _B16x4& inpB,
                                                           const floatx4& inpC)
 {
@@ -105,7 +105,7 @@ __device__ __forceinline__ floatx4 gcn_mfma16x16x16_instr(const _B16x4& inpA,
 }
 
 template <typename T>
-__device__ __forceinline__ _B16x4 from_floatx4_rtz(const floatx4& inp)
+DEVICE_IF_HIPCC __forceinline__ _B16x4 from_floatx4_rtz(const floatx4& inp)
 {
     _B16x4 ret;
     if constexpr(std::is_same<T, _Float16>::value)
@@ -140,7 +140,7 @@ __device__ __forceinline__ _B16x4 from_floatx4_rtz(const floatx4& inp)
 }
 
 template <typename T>
-__device__ __forceinline__ _B16x8 convert_b8x8_custom(const _B8x8 input)
+DEVICE_IF_HIPCC __forceinline__ _B16x8 convert_b8x8_custom(const _B8x8 input)
 {
     union
     {
@@ -157,7 +157,7 @@ __device__ __forceinline__ _B16x8 convert_b8x8_custom(const _B8x8 input)
 }
 
 template <typename T>
-__device__ __forceinline__ T from_float(const float& inp)
+DEVICE_IF_HIPCC __forceinline__ T from_float(const float& inp)
 {
     if constexpr(std::is_same<T, _Float16>::value)
     {
@@ -174,7 +174,7 @@ __device__ __forceinline__ T from_float(const float& inp)
 }
 
 template <typename T>
-__device__ __forceinline__ float to_float(const T& inp)
+DEVICE_IF_HIPCC __forceinline__ float to_float(const T& inp)
 {
     if constexpr(std::is_same<T, _Float16>::value)
     {
@@ -191,7 +191,7 @@ __device__ __forceinline__ float to_float(const T& inp)
 }
 
 template <typename T>
-__device__ __forceinline__ _B16x4 from_floatx4(const floatx4& inp)
+DEVICE_IF_HIPCC __forceinline__ _B16x4 from_floatx4(const floatx4& inp)
 {
     union tmpcvt
     {
@@ -246,7 +246,9 @@ template <typename scalar_t,
           bool ALIBI_ENABLED,
           bool LOGITS_SOFT_CAP_ENABLED,
           int GQA_RATIO>
-__global__ __launch_bounds__(NUM_THREADS) void paged_attention_ll4mi_QKV_mfma16_kernel(
+struct paged_attention_ll4mi_QKV_mfma16 {
+static
+DEVICE_IF_HIPCC void k(
     const scalar_t* __restrict__ q,      // [num_seqs, num_heads, head_size]
     const cache_t* __restrict__ k_cache, // [num_blocks, num_kv_heads,
                                          // head_size/x, block_size, x]
@@ -862,6 +864,7 @@ __global__ __launch_bounds__(NUM_THREADS) void paged_attention_ll4mi_QKV_mfma16_
         }
     }
 }
+};
 """
 
 _REDUCE_SRC = r"""
@@ -872,7 +875,9 @@ template <typename scalar_t,
           int NUM_THREADS,
           int PARTITION_SIZE,
           int NPAR_LOOPS, bool ENABLE_LAST_PAGE_LENS>
-__global__ __launch_bounds__(NUM_THREADS) void paged_attention_ll4mi_reduce_kernel(
+struct paged_attention_ll4mi_reduce {
+static
+DEVICE_IF_HIPCC void k(
     OUTT* __restrict__ out,                    // [num_seqs, num_heads, head_size]
     const float* __restrict__ exp_sums,        // [num_seqs, num_heads,
                                                // max_num_partitions]
@@ -1089,6 +1094,7 @@ __global__ __launch_bounds__(NUM_THREADS) void paged_attention_ll4mi_reduce_kern
         out_ptr[threadIdx.x] = from_float<scalar_t>(acc);
     }
 }
+};
 """
 
 suffix_template_dict = {
@@ -1099,12 +1105,44 @@ suffix_template_dict = {
 #include <hip/hip_bf16.h>
 #include "hip_float8.h"
 
+#ifdef __HIPCC__
+#define HOST_IF_HIPCC __host__
+#define DEVICE_IF_HIPCC __device__
+
+#else
+#define HOST_IF_HIPCC
+#define DEVICE_IF_HIPCC
+#endif
 
 {{util_src}}
 
 {{paged_attn_kernel}}
 
 {{reduce_kernel}}
+
+template<typename Callable, int32_t kMaxThreadsPerBlock, int32_t kMinWarpsPerCU, typename... Args>
+__global__
+void
+__launch_bounds__(kMaxThreadsPerBlock, kMinWarpsPerCU)
+launch_kernel(Args... args) {
+    Callable::k(args...);
+}
+
+template<int32_t kMaxThreadsPerBlock, int32_t kMinWarpsPerCU, typename Callable, typename... Args>
+HOST_IF_HIPCC
+auto
+make_kernel_launcher(dim3 grid_dim, dim3 block_dim, size_t lds_bytes, Args... args) {
+    return [=] (hipStream_t stream) {
+        launch_kernel<Callable, kMaxThreadsPerBlock, kMinWarpsPerCU, Args...><<<grid_dim, block_dim, lds_bytes, stream>>>(args...);
+    };
+}
+
+template<typename... Callables>
+HOST_IF_HIPCC
+void
+schedule_callables_on_gpu(hipStream_t stream, Callables... cs) {
+    (cs(stream),...);
+}
 
 void {{func_name}}({{func_args}}) {
     using T = {{query_dtype}};
@@ -1160,23 +1198,22 @@ void {{func_name}}({{func_args}}) {
         reinterpret_cast<T*>(max_logits_ptr + (num_seqs * num_heads * max_num_partitions));
 
     constexpr int NTHR = 256;
-    dim3 grid(num_seqs, max_num_partitions, num_kv_heads);
-    dim3 block(NTHR);
     // const at::cuda::OptionalCUDAGuard device_guard(device_of(query));
     auto stream = reinterpret_cast<cudaStream_t>(cuda_stream);
 
-    auto attention_kptr = &paged_attention_ll4mi_QKV_mfma16_kernel<T,
-                                            KVT,
-                                            KV_DTYPE,
-                                            OUTT,
-                                            BLOCK_SIZE,
-                                            HEAD_SIZE,
-                                            NTHR,
-                                            ALIBI_ENABLED,
-                                            LOGITS_SOFT_CAP_ENABLED,
-                                            GQA_RATIO>;
-
-    auto status = attention_kptr<<<grid, block, 0, stream>>>(
+    auto attention_launcher = make_kernel_launcher<256, 2, paged_attention_ll4mi_QKV_mfma16<T,
+                                        KVT,
+                                        KV_DTYPE,
+                                        OUTT,
+                                        BLOCK_SIZE,
+                                        HEAD_SIZE,
+                                        NTHR,
+                                        ALIBI_ENABLED,
+                                        LOGITS_SOFT_CAP_ENABLED,
+                                        GQA_RATIO>>(
+        dim3(num_seqs, max_num_partitions, num_kv_heads),
+        dim3(NTHR),
+        0,
         query_ptr,
         key_cache_ptr,
         value_cache_ptr,
@@ -1196,48 +1233,32 @@ void {{func_name}}({{func_args}}) {
         logits_soft_cap,
         k_scale_ptr,
         v_scale_ptr,
-        fp8_out_scale_ptr);
+        fp8_out_scale_ptr
+    );
 
-    TORCH_CHECK(status == gpuSuccess, "paged_attention_ll4mi_QKV_mfma16_kernel failed with error ",
-        gpuGetErrorString(status));
-
-    dim3 reduce_grid(num_heads, num_seqs);
-    dim3 reduce_block(head_size);
-    const int npar_loops = DIVIDE_ROUND_UP(max_num_partitions, WARP_SIZE);
-
-    // reduction kernel supports upto 8 NPAR_loops * 64 (warp_size) * 256 (partition size) = 128K
-    // context length
-    switch(npar_loops)
-    {
-    {% for nl in range(1, 9) %}
-    case {{nl}}:
-        status = paged_attention_ll4mi_reduce_kernel<
+    auto reduce_launcher = make_kernel_launcher<256, 2, paged_attention_ll4mi_reduce<
             T,
             OUTT,
             HEAD_SIZE,
             HEAD_SIZE,
             PARTITION_SIZE,
-            {{nl}},
-            (BLOCK_SIZE > 1)>
-            <<<reduce_grid, reduce_block, 0, stream>>> (
-            out_ptr,
-            exp_sums_ptr,
-            max_logits_ptr,
-            tmp_out_ptr,
-            kv_indptr_ptr,
-            kv_last_page_lens_ptr,
-            BLOCK_SIZE,
-            max_num_partitions,
-            fp8_out_scale_ptr);
-        break;
-    {% endfor %}
-    default:
-        TORCH_CHECK(false, "Unsupported npar_loops: ", npar_loops);
-        break;
-    }
+            1, 
+            (BLOCK_SIZE > 1)>>(
+        dim3(num_heads, num_seqs),
+        dim3(head_size),
+        0,
+        out_ptr,
+        exp_sums_ptr,
+        max_logits_ptr,
+        tmp_out_ptr,
+        kv_indptr_ptr,
+        kv_last_page_lens_ptr,
+        BLOCK_SIZE,
+        max_num_partitions,
+        fp8_out_scale_ptr
+    );
 
-    TORCH_CHECK(status == gpuSuccess, "paged_attention_ll4mi_reduce_kernel failed with error ",
-        gpuGetErrorString(status));
+    schedule_callables_on_gpu(stream, attention_launcher, reduce_launcher);
 }
 
 """,
