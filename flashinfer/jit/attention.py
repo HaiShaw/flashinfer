@@ -640,6 +640,10 @@ def get_aiter_decode_uri(*,
                          dtype_o: torch.dtype,
                          # dtype_idx: torch.dtype,
                          head_dim: int,
+                         block_size: int,
+                         alibi_enabled: bool,
+                         logits_soft_cap_enabled: bool,
+                         gqa_ratio: int,
                          # pos_encoding_mode: int,
                          # use_sliding_window: bool,
                          # use_logits_soft_cap: bool,
@@ -658,7 +662,7 @@ _aiter_default_kwargs = {
     'dtype_q': torch.float16,
     'dtype_kv': torch.float16,
     'block_size': 1,
-    'head_size': 128,
+    'head_dim': 128,
     'dtype_o': torch.float16,
     'alibi_enabled': True,
     'logits_soft_cap_enabled': True,
@@ -679,14 +683,14 @@ def gen_aiter_decode_module(**kwargs):
         'key_value_dtype': dtype_map[kwargs["dtype_kv"]],
         # 'kvcache_dtype': kwargs["dtype_kv"],
         'block_size': kwargs["block_size"],
-        'head_size': kwargs["head_size"],
+        'head_size': kwargs["head_dim"],
         'out_dtype': dtype_map[kwargs["dtype_o"]],
         'alibi_enabled': int(kwargs["alibi_enabled"]),
         'logits_soft_cap_enabled': int(kwargs["logits_soft_cap_enabled"]),
         'gqa_ratio': int(kwargs["gqa_ratio"])
     }
     paths_sources = [
-        ((gen_directory / f"{uri}{suffix}"), jinja2.Template(template).render(*template_kwargs))
+        ((gen_directory / f"{uri}{suffix}"), jinja2.Template(template).render(**template_kwargs))
         for suffix, template in suffix_template_dict.items()
     ]
     for path, source in paths_sources:
