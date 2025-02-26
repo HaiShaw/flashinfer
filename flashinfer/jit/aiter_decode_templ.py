@@ -42,6 +42,18 @@ namespace vllm
 
 #define DIVIDE_ROUND_UP(a, b) (((a) + (b)-1) / (b))
 
+#define HIP_CHECK(expression)                  \
+{                                              \
+    const hipError_t status = expression;      \
+    if(status != hipSuccess){                  \
+        std::cerr << "HIP error "              \
+                  << status << ": "            \
+                  << hipGetErrorString(status) \
+                  << " at " << __FILE__ << ":" \
+                  << __LINE__ << std::endl;    \
+    }                                          \
+}
+
 using float16x2 = __attribute__((__vector_size__(2 * sizeof(_Float16)))) _Float16;
 
 typedef float16x2 _Half2;
@@ -1364,7 +1376,9 @@ HOST_IF_HIPCC
 auto
 make_kernel_launcher(dim3 grid_dim, dim3 block_dim, size_t lds_bytes, Args... args) {
     return [=] (hipStream_t stream) {
-        launch_kernel<Callable, kMaxThreadsPerBlock, kMinWarpsPerCU, Args...><<<grid_dim, block_dim, lds_bytes, stream>>>(args...);
+        launch_kernel<Callable, kMaxThreadsPerBlock, kMinWarpsPerCU, Args...>
+           <<<grid_dim, block_dim, lds_bytes, stream>>>(args...);
+        return hipPeekAtLastError() == hipSuccess;
     };
 }
 
@@ -1372,7 +1386,10 @@ template<typename... Callables>
 HOST_IF_HIPCC
 void
 schedule_callables_on_gpu(hipStream_t stream, Callables... cs) {
-    (cs(stream),...);
+    bool success = (cs(stream) && ...);
+    if (!success) {
+        HIP_CHECK(hipGetLastError());
+    }
 }
 
 void {{func_name}}({{func_args}}) {
