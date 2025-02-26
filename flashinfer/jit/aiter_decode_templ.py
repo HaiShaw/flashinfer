@@ -68,6 +68,215 @@ typedef struct _B8x16
 
 using floatx4   = __attribute__((__vector_size__(4 * sizeof(float)))) float;
 
+template <int we, int wm, typename T, bool negative_zero_nan, bool clip>
+  DEVICE_IF_HIPCC uint8_t to_float8(T _x, bool stoch = false,
+                                        uint32_t rng = 0)
+  {
+    constexpr bool is_half = std::is_same<T, _Float16>::value;
+    constexpr bool is_float = std::is_same<T, float>::value;
+    static_assert(wm + we == 7, "wm+we==7");
+    static_assert(is_half || is_float, "Only half and float can be cast to f8");
+
+    const int mfmt = (sizeof(T) == 4) ? 23 : 10;
+    uint32_t x;
+    if (sizeof(T) == 4)
+    {
+      x = reinterpret_cast<uint32_t &>(_x);
+    }
+    else
+    {
+      x = reinterpret_cast<uint16_t &>(_x);
+    }
+
+    uint32_t head, mantissa;
+    int exponent, bias;
+    uint32_t sign;
+
+    if (sizeof(T) == 4)
+    {
+      head = x & 0xFF800000;
+      mantissa = x & 0x7FFFFF;
+      exponent = (head >> 23) & 0xFF;
+      sign = head >> 31;
+      bias = 127;
+    }
+    else
+    {
+      head = x & 0xFC00;
+      mantissa = x & 0x3FF;
+      exponent = (head >> 10) & 0x1F;
+      sign = head >> 15;
+      bias = 15;
+    }
+
+    uint32_t signed_inf = (sign << 7) + (((1 << we) - 1) << wm);
+
+    // Deal with inf and NaNs
+    if (negative_zero_nan)
+    {
+      if (sizeof(T) == 4)
+      {
+        if ((x & 0x7F800000) == 0x7F800000)
+        {
+          return 0x80;
+        }
+      }
+      else
+      {
+        // if(__hisinf(x) || __hisnan(x))
+        if ((x & 0x7C00) == 0x7C00)
+        {
+          return 0x80;
+        }
+      }
+    }
+    else
+    {
+      if (sizeof(T) == 4)
+      {
+        if ((x & 0x7F800000) == 0x7F800000)
+        {
+          return signed_inf + (mantissa != 0 ? 1 : 0);
+        }
+      }
+      else
+      {
+        if ((x & 0x7C00) == 0x7C00)
+        {
+          return signed_inf + (mantissa != 0 ? 1 : 0);
+        }
+      }
+    }
+    if (x == 0)
+    {
+      return 0;
+    }
+
+    // First need to check if it is normal or denorm as there is a difference of
+    // implicit 1 Then need to adjust the exponent to align with the F8 exponent,
+    // in the meanwhile, shift The mantissa. Then for stochastic rounding, add rng
+    // to mantissa and truncate. And for RNE, no need to add rng. Then probably
+    // need to check whether there is carry and adjust exponent and mantissa again
+
+    // For IEEE bias mode, the bias is 2^(k-1) -1 where k is the width of exponent
+    // bits
+    const int f8_bias = (1 << (we - 1)) - 1 + (negative_zero_nan ? 1 : 0);
+    const int f8_denormal_act_exponent =
+        1 - f8_bias; // actual exponent of f8 denormal
+    // act_exponent is the actual exponent of fp32/fp16 (after subtracting bias)
+    // f8_exponent is the converted f8 exponent with bias encoding
+    // exponent_diff is the diff between fp32/fp16 exponent and f8 exponent,
+    // the difference needs to be adjusted and mantissa shifted
+    int act_exponent, f8_exponent, exponent_diff;
+
+    if (exponent == 0)
+    { // fp32/fp16 is in denormal.
+      /* fp32 denormal is below 2^-127 so it is usually not a concern here, we
+  mostly concern fp16 here. In this case, f8 is usually in denormal. But there
+  could be exceptions. fp16 denormal has exponent bias 15 while bf8 with NANOO has
+  exponent bias 16. It means that there are some numbers in fp16 denormal but they
+  are bf8 (NANOO) normals - smallest bf8 (NANOO) normal is 2^-15. fp16 numbers
+  where exponent==0 (actual exponent -14) and highest bit of mantissa is 1 are bf8
+  (NANOO) normal. In this case, the fp16 mantissa should be shift left by 1  */
+      act_exponent = exponent - bias + 1;
+      exponent_diff =
+          f8_denormal_act_exponent -
+          act_exponent; // actual exponent is exponent-bias+1 as it is denormal
+    }
+    else
+    { // fp32/fp16 is normal with implicit 1
+      act_exponent = exponent - bias;
+      if (act_exponent <= f8_denormal_act_exponent)
+      {
+        /* This is the case where fp32/fp16 is normal but it is in f8 denormal
+  range. For example fp8 nanoo mode, denormal exponent is -7, but if the
+  fp32/fp16 actual exponent is -7, it is actually larger due to the implicit 1,
+  Therefore it needs to be adjust to -6 and mantissa shift right by 1.
+  So for fp32/fp16, exponent -8 is the cut point to convert to fp8 nanoo */
+        exponent_diff = f8_denormal_act_exponent - act_exponent;
+      }
+      else
+      {                    // both fp32/fp16 and f8 are in normal range
+        exponent_diff = 0; // exponent_diff=0 does not mean there is no
+                           // difference for this case, act_exponent could be
+                           // larger. Just that it does not need shift mantissa
+      }
+      mantissa += (1 << mfmt); // Add the implicit 1 into mantissa
+    }
+
+    bool midpoint = (mantissa & ((1 << (mfmt - wm + exponent_diff)) - 1)) ==
+                    static_cast<uint32_t>(1 << (mfmt - wm + exponent_diff - 1));
+    /* This part is a bit tricky. The judgment of whether it is a tie needs to be
+   done before we shift right as shift right could rip off some residual part
+   and make something not midpoint look like midpoint. For example, the fp16
+   number 0x1002 (0 00100 0000000010), it is larger than midpoint, but after
+   shift right by 4 bits, it would look like midpoint.
+  */
+
+    if (exponent_diff > 0)
+    {
+      mantissa >>= exponent_diff;
+    }
+    else if (exponent_diff == -1)
+    {
+      mantissa <<= -exponent_diff;
+    }
+    bool implicit_one = mantissa & (1 << mfmt);
+    // if there is no implicit 1, it  means the f8 is denormal and need to adjust
+    // to denorm exponent
+    f8_exponent = (act_exponent + exponent_diff) /*actual f8 exponent*/ +
+                  f8_bias - (implicit_one ? 0 : 1);
+
+    // Now we have the exponent and mantissa adjusted
+    uint32_t drop_mask = (1 << (mfmt - wm)) - 1;
+    bool odd = mantissa & (1 << (mfmt - wm)); // if the least significant bit
+                                              // that is not truncated is 1
+    mantissa +=
+        (stoch ? rng : (midpoint ? (odd ? mantissa : mantissa - 1) : mantissa)) &
+        drop_mask;
+
+    // Now we deal with overflow
+    if (f8_exponent == 0)
+    {
+      if ((1 << mfmt) & mantissa)
+      {
+        f8_exponent = 1; // denormal overflow to become normal, promote exponent
+      }
+    }
+    else
+    {
+      if ((1 << (mfmt + 1)) & mantissa)
+      {
+        mantissa >>= 1;
+        f8_exponent++;
+      }
+    }
+
+    mantissa >>= (mfmt - wm);
+
+    // above range: quantize to maximum possible float of the same sign
+    const int max_exp = (1 << we) - (negative_zero_nan ? 1 : 2);
+    if (f8_exponent > max_exp)
+    {
+      if (clip)
+      {
+        mantissa = (1 << wm) - 1;
+        f8_exponent = max_exp;
+      }
+      else
+      {
+        return signed_inf;
+      }
+    }
+
+    if (f8_exponent == 0 && mantissa == 0)
+    {
+      return negative_zero_nan ? 0 : (sign << 7);
+    }
+    mantissa &= (1 << wm) - 1;
+    return (sign << 7) | (f8_exponent << wm) | mantissa;
+  }
+
 template <typename T>
 DEVICE_IF_HIPCC __forceinline__ T loadnt(T* addr)
 {
@@ -137,6 +346,24 @@ DEVICE_IF_HIPCC __forceinline__ _B16x4 from_floatx4_rtz(const floatx4& inp)
     {
         static_assert(false, "unsupported 16b dtype");
     }
+}
+
+__device__ __forceinline__ floatx4 to_float_fp8x4(const _B8x4& inp)
+{
+#if defined(__gfx90a__)
+    float4 f32x4 =
+        vllm::fp8::vec_conversion<float4, uint32_t>(*reinterpret_cast<const uint32_t*>(&inp));
+    return *reinterpret_cast<floatx4*>(&f32x4);
+#else // MI3xx+ optimized builtins
+    const auto f0 = __builtin_amdgcn_cvt_pk_f32_fp8(inp, false);
+    const auto f1 = __builtin_amdgcn_cvt_pk_f32_fp8(inp, true);
+    floatx4 ret;
+    ret[0] = f0[0];
+    ret[1] = f0[1];
+    ret[2] = f1[0];
+    ret[3] = f1[1];
+    return ret;
+#endif
 }
 
 template <typename T>
@@ -1087,7 +1314,12 @@ DEVICE_IF_HIPCC void k(
     OUTT* out_ptr = out + seq_idx * num_heads * HEAD_SIZE + head_idx * HEAD_SIZE;
     if constexpr(std::is_same<OUTT, bit8_t>::value)
     {
-        out_ptr[threadIdx.x] = hip_fp8(acc).data;
+        out_ptr[threadIdx.x] = to_float8<
+            4, /* exp bits */  
+            3, /* mantissa bits */  
+            float, /* from_type */  
+            true, /*negative_zero_nan*/
+            true /*clip*/>(acc);
     }
     else
     {
@@ -1103,7 +1335,6 @@ suffix_template_dict = {
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_bf16.h>
-#include "hip_float8.h"
 
 #ifdef __HIPCC__
 #define HOST_IF_HIPCC __host__
