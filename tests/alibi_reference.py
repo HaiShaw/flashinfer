@@ -90,7 +90,6 @@ def alibi_attention(
     key: torch.Tensor,
     value: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
-    logits_soft_cap: float = 0.0
 ):
     """
     query: [q_len, num_heads, head_dim]
@@ -104,22 +103,17 @@ def alibi_attention(
     scores = torch.einsum("qhd,khd->qkh", query.float(), key.float())
     # Scale scores $\frac{Q K^\top}{\sqrt{d_k}}$
     scores *= 1.0 / math.sqrt(head_dim)
-    if logits_soft_cap > 0.0:
-        scores = logits_soft_cap * torch.tanh(scores / logits_soft_cap)
 
-    # FIXME: remove this check after we no longer need alibi_attention()
-    #        to be a CPU attention reference function
-    if mask is not None:
-        # Create AliBi biases if it's not cached
-        alibi_biases = get_alibi_biases(num_heads, mask)
+    # Create AliBi biases if it's not cached
+    alibi_biases = get_alibi_biases(num_heads, mask)
 
-        # Add AliBi biases to attention scores.
-        # ALiBi biases has shape `[seq_len, seq_len, n_heads]`
-        # and `scores` has shape `[seq_len, seq_len, batch_size, n_heads]`
-        scores += alibi_biases
+    # Add AliBi biases to attention scores.
+    # ALiBi biases has shape `[seq_len, seq_len, n_heads]`
+    # and `scores` has shape `[seq_len, seq_len, batch_size, n_heads]`
+    scores += alibi_biases
 
-        # Apply mask
-        scores = scores.masked_fill(mask.unsqueeze(-1) == 0, float("-inf"))
+    # Apply mask
+    scores = scores.masked_fill(mask.unsqueeze(-1) == 0, float("-inf"))
 
     # $softmax$ attention along the key sequence dimension
     # $\underset{seq}{softmax}\Bigg(\frac{Q K^\top}{\sqrt{d_k}}\Bigg)$
