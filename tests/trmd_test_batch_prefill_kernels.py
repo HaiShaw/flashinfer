@@ -19,8 +19,7 @@ import torch
 from jit_utils import jit_prefill_attention_func_args
 
 import flashinfer
-
-from alibi_reference import alibi_attention
+import math
 
 torch.manual_seed(123)
 
@@ -48,12 +47,26 @@ def warmup_jit():
         finally:
             yield
 
+def ref_masked_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    logits_soft_cap: float = 0.0
+) -> torch.Tensor:
+    head_dim = query.shape[2]
+    scale = 1.0 / math.sqrt(head_dim)
+    attn_weights = scale * torch.einsum("qhd,khd->hqk", query.float(), key.float())
+    if 0 < logits_soft_cap:
+        attn_weights = logits_soft_cap * torch.tanh(attn_weights / logits_soft_cap)
+    attn_weights = torch.softmax(attn_weights, dim=-1)
+    out = torch.einsum("hqk,khd->qhd", attn_weights, value.float())
+    return out.to(query)
 
 @pytest.mark.parametrize("batch_size", [12, 17])
 @pytest.mark.parametrize("kv_len", [264, 520])
 @pytest.mark.parametrize("qo_len", [37, 17])
 @pytest.mark.parametrize("page_size", [1, 16])
-@pytest.mark.parametrize("num_qo_kv_heads", [(4, 4)])
+@pytest.mark.parametrize("num_qo_kv_heads", [(2, 1), (4, 1)])
 @pytest.mark.parametrize("head_dim", [64, 128])
 @pytest.mark.parametrize("causal", [False])
 @pytest.mark.parametrize("kv_layout", ["HND", "NHD"])
@@ -262,7 +275,6 @@ def test_batch_prefill_with_paged_kv_cache(
         )
         """
         # NOTICE: for now, we use alibi_attention() as reference function
-        assert num_kv_heads == num_qo_heads
         assert not causal
         assert pos_encoding_mode == 'NONE'
         assert not return_lse
@@ -270,7 +282,7 @@ def test_batch_prefill_with_paged_kv_cache(
         rtol = 1e-3 if dtype == torch.float16 else 1e-2
         atol = 1e-3 if dtype == torch.float16 else 1e-2 
 
-        o_ref_i = alibi_attention(qi, ki, vi, None, logits_soft_cap)
+        o_ref_i = ref_masked_attention(qi, ki, vi, logits_soft_cap)
         o_i = o[q_indptr_cpu[i] : q_indptr_cpu[i + 1]]
         torch.testing.assert_close(o_i, o_ref_i, rtol=rtol, atol=atol)
 
