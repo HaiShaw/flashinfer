@@ -655,6 +655,10 @@ def get_aiter_decode_uri(*,
         f"dtype_kv_{filename_safe_dtype_map[dtype_kv]}_"
         f"dtype_o_{filename_safe_dtype_map[dtype_o]}_"
         f"head_dim_{head_dim}_"
+        f"page_size_{block_size}_"
+        f"alibi_enabled_{str(alibi_enabled)[0]}_"
+        f"logits_soft_cap_enabled_{str(logits_soft_cap_enabled)[0]}_"
+        f"gqa_ratio_{gqa_ratio}_"
     )
 
 
