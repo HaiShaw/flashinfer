@@ -148,14 +148,13 @@ def load_cuda_ops(
     build_directory = FLASHINFER_JIT_DIR / name
     os.makedirs(build_directory, exist_ok=True)
     if extra_include_paths is None:
-        extra_include_paths = [
-            FLASHINFER_INCLUDE_DIR,
-            FLASHINFER_CSRC_DIR,
-        ]
-        if check_hip_availability():
-            extra_include_paths += []
-        elif check_cuda_availability():
-            extra_include_paths += CUTLASS_INCLUDE_DIRS
+        extra_include_paths = []
+    extra_include_paths += [
+        FLASHINFER_INCLUDE_DIR,
+        FLASHINFER_CSRC_DIR,
+    ]
+    if check_cuda_availability():
+        extra_include_paths += CUTLASS_INCLUDE_DIRS
     lock = FileLock(FLASHINFER_JIT_DIR / f"{name}.lock", thread_local=False)
     with lock:
         module = torch_cpp_ext.load(
