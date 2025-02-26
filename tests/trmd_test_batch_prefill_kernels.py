@@ -53,8 +53,7 @@ def warmup_jit():
 @pytest.mark.parametrize("kv_len", [264, 520])
 @pytest.mark.parametrize("qo_len", [37, 17])
 @pytest.mark.parametrize("page_size", [1, 16])
-@pytest.mark.parametrize("num_kv_heads", [4])
-@pytest.mark.parametrize("num_qo_heads", [4])
+@pytest.mark.parametrize("num_qo_kv_heads", [(4, 4)])
 @pytest.mark.parametrize("head_dim", [64, 128])
 @pytest.mark.parametrize("causal", [False])
 @pytest.mark.parametrize("kv_layout", ["HND", "NHD"])
@@ -69,8 +68,7 @@ def test_batch_prefill_with_paged_kv_cache(
     kv_len,
     qo_len,
     page_size,
-    num_kv_heads,
-    num_qo_heads,
+    num_qo_kv_heads,
     head_dim,
     causal,
     kv_layout,
@@ -81,6 +79,7 @@ def test_batch_prefill_with_paged_kv_cache(
     contiguous_kv,
     dtype,
 ):
+    num_qo_heads, num_kv_heads = num_qo_kv_heads
     q = torch.randn(batch_size * qo_len, num_qo_heads, head_dim).to(dtype).to(0)
     q_indptr_cpu = torch.arange(0, batch_size + 1).int() * qo_len
     num_pages_per_seq = (kv_len + page_size - 1) // page_size
