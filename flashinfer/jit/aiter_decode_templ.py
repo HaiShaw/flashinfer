@@ -1197,22 +1197,23 @@ void {{func_name}}({{func_args}}) {
     T* tmp_out_ptr =
         reinterpret_cast<T*>(max_logits_ptr + (num_seqs * num_heads * max_num_partitions));
 
-    constexpr int NTHR = 256;
+    constexpr int ATTENTION_NUM_THREADS = 256;
+    constexpr int MIN_OCCUPANCY = 2;
     // const at::cuda::OptionalCUDAGuard device_guard(device_of(query));
     auto stream = reinterpret_cast<cudaStream_t>(cuda_stream);
 
-    auto attention_launcher = make_kernel_launcher<256, 2, paged_attention_ll4mi_QKV_mfma16<T,
+    auto attention_launcher = make_kernel_launcher<ATTENTION_NUM_THREADS, MIN_OCCUPANCY, paged_attention_ll4mi_QKV_mfma16<T,
                                         KVT,
                                         KV_DTYPE,
                                         OUTT,
                                         BLOCK_SIZE,
                                         HEAD_SIZE,
-                                        NTHR,
+                                        ATTENTION_NUM_THREADS,
                                         ALIBI_ENABLED,
                                         LOGITS_SOFT_CAP_ENABLED,
                                         GQA_RATIO>>(
         dim3(num_seqs, max_num_partitions, num_kv_heads),
-        dim3(NTHR),
+        dim3(ATTENTION_NUM_THREADS),
         0,
         query_ptr,
         key_cache_ptr,
@@ -1236,11 +1237,13 @@ void {{func_name}}({{func_args}}) {
         fp8_out_scale_ptr
     );
 
-    auto reduce_launcher = make_kernel_launcher<256, 2, paged_attention_ll4mi_reduce<
+    constexpr int REDUCE_NUM_THREADS = HEAD_SIZE;
+
+    auto reduce_launcher = make_kernel_launcher<REDUCE_NUM_THREADS, MIN_OCCUPANCY, paged_attention_ll4mi_reduce<
             T,
             OUTT,
             HEAD_SIZE,
-            HEAD_SIZE,
+            REDUCE_NUM_THREADS,
             PARTITION_SIZE,
             1, 
             (BLOCK_SIZE > 1)>>(
