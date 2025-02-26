@@ -659,11 +659,11 @@ def get_aiter_decode_uri(*,
 
 
 _aiter_default_kwargs = {
-    'dtype_q': torch.float16,
-    'dtype_kv': torch.float16,
+    'dtype_q': torch.bfloat16,
+    'dtype_kv': torch.bfloat16,
     'block_size': 1,
     'head_dim': 128,
-    'dtype_o': torch.float16,
+    'dtype_o': torch.bfloat16,
     'alibi_enabled': True,
     'logits_soft_cap_enabled': True,
     'gqa_ratio': 1,

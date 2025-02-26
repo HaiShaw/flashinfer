@@ -24,7 +24,7 @@ _FUNC_ARGS = r"""
     at::Tensor& v_scale,
     const c10::optional<at::Tensor>& fp8_out_scale,
     int64_t partition_size,
-    int64_t stream
+    int64_t cuda_stream
 """
 
 _UTIL_SRC = r"""
@@ -1089,24 +1089,17 @@ __global__ __launch_bounds__(NUM_THREADS) void paged_attention_ll4mi_reduce_kern
         out_ptr[threadIdx.x] = from_float<scalar_t>(acc);
     }
 }
-
-#define LAUNCH_CUSTOM_REDUCTION(NPAR_LOOPS)                                                        \
-    status = paged_attention_ll4mi_reduce_kernel<T, OUTT, HEAD_SIZE, HEAD_SIZE, PARTITION_SIZE, NPAR_LOOPS, (BLOCK_SIZE > 1)> \
-        <<<reduce_grid, reduce_block, 0, stream>>>(out_ptr,                                        \
-                                                   exp_sums_ptr,                                   \
-                                                   max_logits_ptr,                                 \
-                                                   tmp_out_ptr,                                    \
-                                                   kv_indptr_ptr,                                  \
-                                                   kv_last_page_lens_ptr,                          \
-                                                   BLOCK_SIZE,                                     \
-                                                   max_num_partitions,                             \
-                                                   fp8_out_scale_ptr);
-
 """
 
 suffix_template_dict = {
     '.cu': r"""// generated with aiter_decode_templ.py
 #include "pytorch_extension_utils.h"
+#ifdef __HIPCC__
+#include <hip/hip_fp16.h>
+#include <hip/hip_bf16.h>
+#endif
+#include "hip_float8.h"
+
 
 {{util_src}}
 
@@ -1214,15 +1207,31 @@ void {{func_name}}({{func_args}}) {
     // context length
     switch(npar_loops)
     {
-    case 1: LAUNCH_CUSTOM_REDUCTION(1); break;
-    case 2: LAUNCH_CUSTOM_REDUCTION(2); break;
-    case 3: LAUNCH_CUSTOM_REDUCTION(3); break;
-    case 4: LAUNCH_CUSTOM_REDUCTION(4); break;
-    case 5: LAUNCH_CUSTOM_REDUCTION(5); break;
-    case 6: LAUNCH_CUSTOM_REDUCTION(6); break;
-    case 7: LAUNCH_CUSTOM_REDUCTION(7); break;
-    case 8: LAUNCH_CUSTOM_REDUCTION(8); break;
-    default: TORCH_CHECK(false, "Unsupported npar_loops: ", npar_loops); break;
+    {% for nl in range(1, 9) %}
+    case {{nl}}:
+        status = paged_attention_ll4mi_reduce_kernel<
+            T,
+            OUTT,
+            HEAD_SIZE,
+            HEAD_SIZE,
+            PARTITION_SIZE,
+            {{nl}},
+            (BLOCK_SIZE > 1)>
+            <<<reduce_grid, reduce_block, 0, stream>>> (
+            out_ptr,
+            exp_sums_ptr,
+            max_logits_ptr,
+            tmp_out_ptr,
+            kv_indptr_ptr,
+            kv_last_page_lens_ptr,
+            BLOCK_SIZE,
+            max_num_partitions,
+            fp8_out_scale_ptr);
+        break;
+    {% endfor %}
+    default:
+        TORCH_CHECK(false, "Unsupported npar_loops: ", npar_loops);
+        break;
     }
 
     TORCH_CHECK(status == gpuSuccess, "paged_attention_ll4mi_reduce_kernel failed with error ",
