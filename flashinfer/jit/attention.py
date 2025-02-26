@@ -695,4 +695,4 @@ def gen_aiter_decode_module(**kwargs):
     ]
     for path, source in paths_sources:
         write_if_different(path, source)
-    return load_cuda_ops(uri, [source for _, source in paths_sources], verbose=True)
+    return load_cuda_ops(uri, [path for path, _ in paths_sources], verbose=True)
