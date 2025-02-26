@@ -1094,10 +1094,9 @@ __global__ __launch_bounds__(NUM_THREADS) void paged_attention_ll4mi_reduce_kern
 suffix_template_dict = {
     '.cu': r"""// generated with aiter_decode_templ.py
 #include "pytorch_extension_utils.h"
-#ifdef __HIPCC__
+#include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_bf16.h>
-#endif
 #include "hip_float8.h"
 
 
@@ -1112,7 +1111,7 @@ void {{func_name}}({{func_args}}) {
     using KVT = {{key_value_dtype}};
     using OUTT = {{out_dtype}};
 
-    constexpr int32_t KV_DTYPE = 0;
+    constexpr auto KV_DTYPE = vllm::Fp8KVCacheDataType::kAuto;
 
     constexpr int32_t HEAD_SIZE = {{head_size}};
     constexpr int32_t BLOCK_SIZE = {{block_size}};
@@ -1152,6 +1151,7 @@ void {{func_name}}({{func_args}}) {
     const int gqa_ratio          = num_heads / num_kv_heads;
     TORCH_CHECK(num_heads % num_kv_heads == 0);
     TORCH_CHECK(head_size == HEAD_SIZE);
+    TORCH_CHECK(gqa_ratio == GQA_RATIO);
 
     // split workspace into 3 intermediate tensors
     float* exp_sums_ptr   = reinterpret_cast<float*>(workspace_buffer.data_ptr());
@@ -1163,9 +1163,9 @@ void {{func_name}}({{func_args}}) {
     dim3 grid(num_seqs, max_num_partitions, num_kv_heads);
     dim3 block(NTHR);
     // const at::cuda::OptionalCUDAGuard device_guard(device_of(query));
-    const auto stream = reinterpret_cast<gpuStream_t>(cuda_stream);
+    auto stream = reinterpret_cast<cudaStream_t>(cuda_stream);
 
-    auto status = paged_attention_ll4mi_QKV_mfma16_kernel<T,
+    auto attention_kptr = &paged_attention_ll4mi_QKV_mfma16_kernel<T,
                                             KVT,
                                             KV_DTYPE,
                                             OUTT,
@@ -1174,27 +1174,29 @@ void {{func_name}}({{func_args}}) {
                                             NTHR,
                                             ALIBI_ENABLED,
                                             LOGITS_SOFT_CAP_ENABLED,
-                                            GQA_RATIO>
-        <<<grid, block, 0, stream>>>(query_ptr,
-                                     key_cache_ptr,
-                                     value_cache_ptr,
-                                     scale,
-                                     kv_indptr_ptr,
-                                     kv_page_indices_ptr,
-                                     kv_last_page_lens_ptr,
-                                     alibi_slopes_ptr,
-                                     q_stride,
-                                     kv_block_stride,
-                                     kv_head_stride,
-                                     kv_seq_stride,
-                                     exp_sums_ptr,
-                                     max_logits_ptr,
-                                     tmp_out_ptr,
-                                     out_ptr,
-                                     logits_soft_cap,
-                                     k_scale_ptr,
-                                     v_scale_ptr,
-                                     fp8_out_scale_ptr);
+                                            GQA_RATIO>;
+
+    auto status = attention_kptr<<<grid, block, 0, stream>>>(
+        query_ptr,
+        key_cache_ptr,
+        value_cache_ptr,
+        scale,
+        kv_indptr_ptr,
+        kv_page_indices_ptr,
+        kv_last_page_lens_ptr,
+        alibi_slopes_ptr,
+        q_stride,
+        kv_block_stride,
+        kv_head_stride,
+        kv_seq_stride,
+        exp_sums_ptr,
+        max_logits_ptr,
+        tmp_out_ptr,
+        out_ptr,
+        logits_soft_cap,
+        k_scale_ptr,
+        v_scale_ptr,
+        fp8_out_scale_ptr);
 
     TORCH_CHECK(status == gpuSuccess, "paged_attention_ll4mi_QKV_mfma16_kernel failed with error ",
         gpuGetErrorString(status));
