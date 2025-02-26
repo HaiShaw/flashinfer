@@ -1386,8 +1386,7 @@ template<typename... Callables>
 HOST_IF_HIPCC
 void
 schedule_callables_on_gpu(hipStream_t stream, Callables... cs) {
-    bool success = (cs(stream) && ...);
-    if (!success) {
+    if (!(cs(stream) && ...)) {
         HIP_CHECK(hipGetLastError());
     }
 }
