@@ -1470,29 +1470,40 @@ void {{func_name}}({{func_args}}) {
 
     constexpr int REDUCE_NUM_THREADS = HEAD_SIZE;
 
-    auto reduce_launcher = make_kernel_launcher<REDUCE_NUM_THREADS, MIN_OCCUPANCY, paged_attention_ll4mi_reduce<
+    const int npar_loops = DIVIDE_ROUND_UP(max_num_partitions, WARP_SIZE);
+
+    switch(npar_loops) {
+    {% for npar_loops in range(1, 9) %}
+        case {{npar_loops}}:
+        {
+        auto reduce_launcher = make_kernel_launcher<REDUCE_NUM_THREADS, MIN_OCCUPANCY, paged_attention_ll4mi_reduce<
             T,
             OUTT,
             HEAD_SIZE,
             REDUCE_NUM_THREADS,
             PARTITION_SIZE,
-            1, 
+            {{npar_loops}},
             (BLOCK_SIZE > 1)>>(
-        dim3(num_heads, num_seqs),
-        dim3(head_size),
-        0,
-        out_ptr,
-        exp_sums_ptr,
-        max_logits_ptr,
-        tmp_out_ptr,
-        kv_indptr_ptr,
-        kv_last_page_lens_ptr,
-        BLOCK_SIZE,
-        max_num_partitions,
-        fp8_out_scale_ptr
-    );
-
-    schedule_callables_on_gpu(stream, attention_launcher, reduce_launcher);
+            dim3(num_heads, num_seqs),
+            dim3(head_size),
+            0,
+            out_ptr,
+            exp_sums_ptr,
+            max_logits_ptr,
+            tmp_out_ptr,
+            kv_indptr_ptr,
+            kv_last_page_lens_ptr,
+            BLOCK_SIZE,
+            max_num_partitions,
+            fp8_out_scale_ptr
+        );
+        schedule_callables_on_gpu(stream, attention_launcher, reduce_launcher);
+        }
+        break;
+    {% endfor %}
+        default:
+        TORCH_CHECK(false, "Invalid number of npar_loops: ", npar_loops);
+    }
 }
 
 """,
