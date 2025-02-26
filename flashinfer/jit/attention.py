@@ -671,12 +671,13 @@ _aiter_default_kwargs = {
 
 
 def gen_aiter_decode_module(**kwargs):
-    from .aiter_decode_templ import suffix_template_dict, _FUNC_NAME, _FUNC_ARGS, _PAGED_ATTN_SRC, _REDUCE_SRC
+    from .aiter_decode_templ import suffix_template_dict, _FUNC_NAME, _FUNC_ARGS, _PAGED_ATTN_SRC, _REDUCE_SRC, _UTIL_SRC
     gen_directory = FLASHINFER_GEN_SRC_DIR
     uri = get_aiter_decode_uri(**kwargs)
     template_kwargs = {
         'func_name': _FUNC_NAME,
         'func_args': _FUNC_ARGS,
+        'util_src': _UTIL_SRC,
         'paged_attn_kernel': _PAGED_ATTN_SRC,
         'reduce_kernel': _REDUCE_SRC,
         'query_dtype': dtype_map[kwargs["dtype_q"]],

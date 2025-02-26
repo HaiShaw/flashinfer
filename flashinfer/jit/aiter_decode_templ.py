@@ -27,8 +27,213 @@ _FUNC_ARGS = r"""
     int64_t stream
 """
 
+_UTIL_SRC = r"""
+namespace vllm
+{
+  enum class Fp8KVCacheDataType
+  {
+    kAuto = 0,
+    kFp8E4M3 = 1,
+    kFp8E5M2 = 2,
+  };
+}
+
+#define WARP_SIZE 64
+
+#define DIVIDE_ROUND_UP(a, b) (((a) + (b)-1) / (b))
+
+using float16x2 = __attribute__((__vector_size__(2 * sizeof(_Float16)))) _Float16;
+
+typedef float16x2 _Half2;
+
+using bit16x4 = __attribute__((__vector_size__(4 * sizeof(uint16_t)))) uint16_t;
+
+typedef bit16x4 _B16x4;
+
+typedef struct _B16x8
+{
+    _B16x4 xy[2];
+} _B16x8;
+
+using _B8x8  = uint2;
+
+using _B8x4  = int32_t; // used in builtins
+
+using bit8_t = uint8_t;
+
+typedef struct _B8x16
+{
+    _B8x8 xy[2];
+} _B8x16;
+
+using floatx4   = __attribute__((__vector_size__(4 * sizeof(float)))) float;
+
+template <typename T>
+__device__ __forceinline__ T loadnt(T* addr)
+{
+    return __builtin_nontemporal_load(addr);
+}
+
+__device__ __forceinline__ _B16x8 load_ntmprl_16Byte(const _B16x8* addr)
+{
+    auto addr_alias = reinterpret_cast<const float*>(addr);
+    auto dat0       = loadnt(addr_alias);
+    auto dat1       = loadnt(addr_alias + 1);
+    auto dat2       = loadnt(addr_alias + 2);
+    auto dat3       = loadnt(addr_alias + 3);
+    auto res        = make_float4(dat0, dat1, dat2, dat3);
+    return *reinterpret_cast<_B16x8*>(&res);
+}
+
+template <typename T, int absz, int cbid, int blgp>
+__device__ __forceinline__ floatx4 gcn_mfma16x16x16_instr(const _B16x4& inpA,
+                                                          const _B16x4& inpB,
+                                                          const floatx4& inpC)
+{
+    if constexpr(std::is_same<T, _Float16>::value)
+    {
+        return __builtin_amdgcn_mfma_f32_16x16x16f16(inpA, inpB, inpC, absz, cbid, blgp);
+    }
+    else if constexpr(std::is_same<T, __hip_bfloat16>::value)
+    {
+        return __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(inpA, inpB, inpC, absz, cbid, blgp);
+    }
+    else
+    {
+        static_assert(false, "unsupported 16b dtype");
+    }
+}
+
+template <typename T>
+__device__ __forceinline__ _B16x4 from_floatx4_rtz(const floatx4& inp)
+{
+    _B16x4 ret;
+    if constexpr(std::is_same<T, _Float16>::value)
+    {
+        union h2cvt
+        {
+            _Half2 h2[2];
+            _B16x4 b16x4;
+        } u;
+        u.h2[0] = __builtin_amdgcn_cvt_pkrtz(inp[0], inp[1]);
+        u.h2[1] = __builtin_amdgcn_cvt_pkrtz(inp[2], inp[3]);
+        return u.b16x4;
+    }
+    else if constexpr(std::is_same<T, __hip_bfloat16>::value)
+    {
+        for(int i = 0; i < 4; i++)
+        {
+            union fcvt
+            {
+                uint32_t i32;
+                float f32;
+            } u;
+            u.f32  = inp[i];
+            ret[i] = uint16_t(u.i32 >> 16);
+        }
+        return ret;
+    }
+    else
+    {
+        static_assert(false, "unsupported 16b dtype");
+    }
+}
+
+template <typename T>
+__device__ __forceinline__ _B16x8 convert_b8x8_custom(const _B8x8 input)
+{
+    union
+    {
+        _B8x8 b8x8;
+        _B8x4 b8x4[2];
+    } tmp;
+    tmp.b8x8 = input;
+    _B16x8 ret;
+    for(int i = 0; i < 2; i++)
+    {
+        ret.xy[i] = from_floatx4_rtz<T>(to_float_fp8x4(tmp.b8x4[i]));
+    }
+    return ret;
+}
+
+template <typename T>
+__device__ __forceinline__ T from_float(const float& inp)
+{
+    if constexpr(std::is_same<T, _Float16>::value)
+    {
+        return (_Float16)inp;
+    }
+    else if constexpr(std::is_same<T, __hip_bfloat16>::value)
+    {
+        return __float2bfloat16(inp);
+    }
+    else
+    {
+        static_assert(false, "unsupported 16b dtype");
+    }
+}
+
+template <typename T>
+__device__ __forceinline__ float to_float(const T& inp)
+{
+    if constexpr(std::is_same<T, _Float16>::value)
+    {
+        return (float)inp;
+    }
+    else if constexpr(std::is_same<T, __hip_bfloat16>::value)
+    {
+        return __bfloat162float(inp);
+    }
+    else
+    {
+        static_assert(false, "unsupported 16b dtype");
+    }
+}
+
+template <typename T>
+__device__ __forceinline__ _B16x4 from_floatx4(const floatx4& inp)
+{
+    union tmpcvt
+    {
+        uint16_t u;
+        _Float16 f;
+        __hip_bfloat16 b;
+    } t16;
+    _B16x4 ret;
+    if constexpr(std::is_same<T, _Float16>::value)
+    {
+        union h2cvt
+        {
+            __half2 h2[2];
+            _B16x4 b16x4;
+        } u;
+        u.h2[0] = __float22half2_rn(make_float2(inp[0], inp[1]));
+        u.h2[1] = __float22half2_rn(make_float2(inp[2], inp[3]));
+        return u.b16x4;
+    }
+    else if constexpr(std::is_same<T, __hip_bfloat16>::value)
+    {
+        for(int i = 0; i < 4; i++)
+        {
+            union fcvt
+            {
+                uint32_t u32;
+                float f32;
+            } u;
+            u.f32 = inp[i];
+            u.u32 += 0x7fff + ((u.u32 >> 16) & 1); // BF16 RNE with no nan/inf check
+            ret[i] = uint16_t(u.u32 >> 16);
+        }
+        return ret;
+    }
+    else
+    {
+        static_assert(false, "unsupported 16b dtype");
+    }
+}
+"""
+
 _PAGED_ATTN_SRC = r"""
-///////////////////////////////////////
 // grid (num_seqs, num_partitions,num_kv_heads)
 // block (256)
 template <typename scalar_t,
@@ -902,6 +1107,8 @@ __global__ __launch_bounds__(NUM_THREADS) void paged_attention_ll4mi_reduce_kern
 suffix_template_dict = {
     '.cu': r"""// generated with aiter_decode_templ.py
 #include "pytorch_extension_utils.h"
+
+{{util_src}}
 
 {{paged_attn_kernel}}
 
