@@ -7,6 +7,7 @@ git clone https://github.com/HaiShaw/flashinfer.git **--recursive**
 ```bash
 rm /root/.cache/flashinfer  -r -f
 git checkout testx
+git checkout flashinfer/jit/aot_config.py
 pip install --no-build-isolation --verbose --editable .
 PYTORCH_ROCM_ARCH="native gfx90a gfx940 gfx941 gfx942" FLASHINFER_ENABLE_AOT=1 FLASHINFER_ENABLE_SM90=0 pip install --no-build-isolation --verbose --editable .
 ```
