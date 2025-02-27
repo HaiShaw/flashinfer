@@ -21,8 +21,6 @@ from jit_utils import jit_prefill_attention_func_args
 import flashinfer
 import math
 
-torch.manual_seed(123)
-
 
 @pytest.fixture(autouse=True, scope="module")
 def warmup_jit():
@@ -76,6 +74,7 @@ def ref_masked_attention(
 @pytest.mark.parametrize("return_lse", [False])
 @pytest.mark.parametrize("contiguous_kv", [True])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("seed", [123])
 def test_batch_prefill_with_paged_kv_cache(
     batch_size,
     kv_len,
@@ -91,7 +90,10 @@ def test_batch_prefill_with_paged_kv_cache(
     return_lse,
     contiguous_kv,
     dtype,
+    seed
 ):
+    torch.manual_seed(seed)
+
     num_qo_heads, num_kv_heads = num_qo_kv_heads
     q = torch.randn(batch_size * qo_len, num_qo_heads, head_dim).to(dtype).to(0)
     q_indptr_cpu = torch.arange(0, batch_size + 1).int() * qo_len
