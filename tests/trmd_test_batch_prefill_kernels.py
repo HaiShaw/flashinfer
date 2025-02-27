@@ -63,8 +63,8 @@ def ref_masked_attention(
     return out.to(query)
 
 @pytest.mark.parametrize("batch_size", [12, 17])
-@pytest.mark.parametrize("kv_len", [264, 520])
-@pytest.mark.parametrize("qo_len", [37, 17])
+@pytest.mark.parametrize("kv_len", [64, 1024])
+@pytest.mark.parametrize("qo_len", [64, 1024])
 @pytest.mark.parametrize("page_size", [1, 16])
 @pytest.mark.parametrize("num_qo_kv_heads", [(2, 1), (4, 1)])
 @pytest.mark.parametrize("head_dim", [64, 128])
