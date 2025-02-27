@@ -695,7 +695,6 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 
   ab_frag_type a_frag[NUM_MMA_Q];
   ab_frag_type b_frag;
-  c_frag_type s_frag_compute[NUM_MMA_Q][NUM_MMA_KV];
 
   // compute q*k^T
 #pragma unroll
@@ -763,7 +762,8 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
             mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ, MMAMode::kInit>(
                 s_frag[mma_q][mma_kv], a_frag[mma_q], b_frag);
 #else
-            s_frag_compute[mma_q][mma_kv] = mfma_m16n16k16_f32<DTypeQ>::run(b_frag, a_frag[mma_q], c_frag_type{});
+            *(c_frag_type*)s_frag[mma_q][mma_kv] = mfma_m16n16k16_f32<DTypeQ>::run(
+              b_frag, a_frag[mma_q], c_frag_type{});
 #endif // disable MMA on ROCm platform
           } else {
 //FIXME
@@ -771,7 +771,8 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
             mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(s_frag[mma_q][mma_kv], a_frag[mma_q],
                                                               b_frag);
 #else
-            s_frag_compute[mma_q][mma_kv] = mfma_m16n16k16_f32<DTypeQ>::run(b_frag, a_frag[mma_q], s_frag_compute[mma_q][mma_kv]);
+            *(c_frag_type*)s_frag[mma_q][mma_kv] = mfma_m16n16k16_f32<DTypeQ>::run(
+              b_frag, a_frag[mma_q], *(c_frag_type*)s_frag[mma_q][mma_kv]);
 #endif // disable MMA on ROCm platform
           }
         } else if (std::is_same_v<DTypeQKAccum, half>) {
@@ -802,17 +803,6 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
                          NUM_MMA_KV * 16 * channel_size_128b_kv;
     }
   }
-
-  if constexpr (sizeof(**s_frag_compute) == sizeof(**s_frag)) {
-    #pragma unroll
-    for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
-      #pragma unroll
-      for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
-        memcpy(&s_frag[mma_q][mma_kv], &s_frag_compute[mma_q][mma_kv], sizeof(**s_frag));
-      }
-    }
-  }
-
   *q_smem_offset_r -= NUM_MMA_D * 2;
   *k_smem_offset_r -= NUM_MMA_D * sizeof(DTypeKV);
 }
@@ -1101,10 +1091,8 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
           mma::mma_sync_m16n16k16_row_col_f16f16f32<DTypeQ>(
               o_frag[mma_q][mma_d], (uint32_t*)(s_frag_f16[mma_q][mma_kv]), b_frag);
 #else
-          *(c_frag_type*)(o_frag[mma_q][mma_d]) = 
-            mfma_m16n16k16_f32<DTypeKV>::run(b_frag, 
-              *(ab_frag_type*)(s_frag_f16[mma_q][mma_kv]), 
-              *(c_frag_type*)(o_frag[mma_q][mma_d]));
+          *(c_frag_type*)(o_frag[mma_q][mma_d]) = mfma_m16n16k16_f32<DTypeKV>::run(
+            b_frag, *(ab_frag_type*)(s_frag_f16[mma_q][mma_kv]), *(c_frag_type*)(o_frag[mma_q][mma_d]));
 #endif // disable MMA on ROCm platform
         } else {
 //FIXME
