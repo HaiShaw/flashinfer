@@ -146,6 +146,9 @@ def test_batch_prefill_with_paged_kv_cache(
     dtype,
     seed
 ):
+    if causal and qo_len > kv_len:
+        pytest.skip('make sure qo_len is no greater than kv_len')
+
     torch.manual_seed(seed)
 
     num_qo_heads, num_kv_heads = num_qo_kv_heads
