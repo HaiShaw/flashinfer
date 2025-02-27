@@ -627,6 +627,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 
   typedef union b128_h {
           b128_t b128;
+          __hip_bfloat16 bf[8];
           __half h[8];
           uint32_t i[4];
 	  __device__ b128_h() { memset( this, 0, sizeof( b128_h ) ); }
@@ -680,6 +681,47 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 	    float tmp1[8] = {0,0,0,0,0,0,0,0};
 	    float tmp2[8] = {0,0,0,0,0,0,0,0};
 	    float tmp3[8] = {0,0,0,0,0,0,0,0};
+
+
+            if constexpr (std::is_same_v<DTypeQ, __hip_bfloat16>) {
+	    for (int se=0; se<8; se++) { 
+	     for (int ie=0; ie<8; ie++) { 
+	      //lanes:0-8
+	      tmp0[se] += 
+	         __bfloat162float(b128_h_a_frag[mma_q].bf[ie]) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+se);
+	      tmp0[se] +=
+	         __shfl(__bfloat162float(b128_h_a_frag[mma_q].bf[ie]), bnd32+bnd16+16+thrd8) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+8+se);
+
+	      //lanes:8-16
+	      tmp1[se] += 
+	         __bfloat162float(b128_h_a_frag[mma_q].bf[ie]) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+8+se);
+	      tmp1[se] +=
+                 __shfl(__bfloat162float(b128_h_a_frag[mma_q].bf[ie]), bnd32+bnd16+16+8+thrd8) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+16+se);
+
+	      //lanes:16-24
+	      tmp2[se] += 
+	         __shfl(__bfloat162float(b128_h_a_frag[mma_q].bf[ie]), bnd32+threadIdx.x-16) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+se);
+	      tmp2[se] +=
+                 __bfloat162float(b128_h_a_frag[mma_q].bf[ie]) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+8+se);
+
+	      //lanes:24-32
+	      tmp3[se] += 
+	         __shfl(__bfloat162float(b128_h_a_frag[mma_q].bf[ie]), bnd32+threadIdx.x-16) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8-24+se);
+	      tmp3[se] +=
+                 __bfloat162float(b128_h_a_frag[mma_q].bf[ie]) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8-16+se);
+	     }
+	    }
+
+	    }
+	    else {
 	    for (int se=0; se<8; se++) { 
 	     for (int ie=0; ie<8; ie++) { 
 	      //lanes:0-8
@@ -715,6 +757,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
 	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8-16+se);
 
 	     }
+	    }
 	    }
 
 	    float tmp4[8];
@@ -979,7 +1022,7 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
                                               smem_t<swizzle_mode>* v_smem,
                                               uint32_t* v_smem_offset_r,
                                               DTypeQKAccum (*s_frag)[NUM_MMA_KV][8],
-                                              float (*o_frag)[NUM_MMA_D][8], float (*d)[2]) {
+                                              float (*o_frag)[NUM_MMA_D][8], float (*d)[2], int iter=1000) {
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
   constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
 
@@ -991,8 +1034,11 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
       for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
         //vec_cast<DTypeQ, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
 //hipFIXED
-        if constexpr(std::is_same<DTypeQ, __half>::value)
-        vec_cast<__half, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
+	vec_cast<DTypeQ, float>::template cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
+        /*if constexpr(std::is_same<DTypeQ, __half>::value)
+          vec_cast<__half, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
+	else if constexpr(std::is_same<DTypeQ, gpu_bfloat16>::value)
+          vec_cast<gpu_bfloat16, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);*/
       }
     }
   }
@@ -1007,7 +1053,62 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
 #if 0  // disable MMA on ROCm platform
           mma::rowsum_f16f16f32(d[mma_q], s_frag_f16[mma_q][mma_kv]);
 #endif // disable MMA on ROCm platform
+	float sum0, sum1;
+	if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
+          sum0  = __bfloat162float(s_frag_f16[mma_q][mma_kv][0]) +
+		       __bfloat162float(s_frag_f16[mma_q][mma_kv][1]) +
+		       __bfloat162float(s_frag_f16[mma_q][mma_kv][4]) +
+		       __bfloat162float(s_frag_f16[mma_q][mma_kv][5]);
+	  sum1  = __bfloat162float(s_frag_f16[mma_q][mma_kv][2]) +
+                       __bfloat162float(s_frag_f16[mma_q][mma_kv][3]) +
+		       __bfloat162float(s_frag_f16[mma_q][mma_kv][6]) +
+		       __bfloat162float(s_frag_f16[mma_q][mma_kv][7]);
+	} else {
+          sum0  = __half2float(s_frag_f16[mma_q][mma_kv][0]) +
+		       __half2float(s_frag_f16[mma_q][mma_kv][1]) +
+		       __half2float(s_frag_f16[mma_q][mma_kv][4]) +
+		       __half2float(s_frag_f16[mma_q][mma_kv][5]);
+	  sum1  = __half2float(s_frag_f16[mma_q][mma_kv][2]) +
+                       __half2float(s_frag_f16[mma_q][mma_kv][3]) +
+		       __half2float(s_frag_f16[mma_q][mma_kv][6]) +
+		       __half2float(s_frag_f16[mma_q][mma_kv][7]);
+	}
+        float rwsm0 = 0, rwsm1 = 0;
+        int thrd4 = (threadIdx.x/4)*4;
+        int bnd32 = (threadIdx.y%2)*32;
+        rwsm0 += __shfl(sum0, bnd32+thrd4) +
+                 __shfl(sum0, bnd32+thrd4+1) +
+                 __shfl(sum0, bnd32+thrd4+2) +
+                 __shfl(sum0, bnd32+thrd4+3);
+        rwsm1 += __shfl(sum1, bnd32+thrd4) +
+                 __shfl(sum1, bnd32+thrd4+1) +
+                 __shfl(sum1, bnd32+thrd4+2) +
+                 __shfl(sum1, bnd32+thrd4+3);
 
+//summing in full float causes error to reference.
+/*        float sum0  = s_frag[mma_q][mma_kv][0] +
+		       s_frag[mma_q][mma_kv][1] +
+		       s_frag[mma_q][mma_kv][4] +
+		       s_frag[mma_q][mma_kv][5];
+	float sum1  = s_frag[mma_q][mma_kv][2] +
+                       s_frag[mma_q][mma_kv][3] +
+		       s_frag[mma_q][mma_kv][6] +
+		       s_frag[mma_q][mma_kv][7];
+        float rwsm0 = 0, rwsm1 = 0;
+        int thrd4 = (threadIdx.x/4)*4;
+        int bnd32 = (threadIdx.y%2)*32;
+        rwsm0 += __shfl(sum0, bnd32+thrd4) +
+                 __shfl(sum0, bnd32+thrd4+1) +
+                 __shfl(sum0, bnd32+thrd4+2) +
+                 __shfl(sum0, bnd32+thrd4+3);
+        rwsm1 += __shfl(sum1, bnd32+thrd4) +
+                 __shfl(sum1, bnd32+thrd4+1) +
+                 __shfl(sum1, bnd32+thrd4+2) +
+                 __shfl(sum1, bnd32+thrd4+3);*/
+
+
+
+/*
         float rwsm0 = 0, rwsm1 = 0;
         int thrd4 = (threadIdx.x/4)*4;
         int bnd32 = (threadIdx.y%2)*32;
@@ -1050,11 +1151,10 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
                  __shfl(s_frag[mma_q][mma_kv][2], bnd32+thrd4+3) +
                  __shfl(s_frag[mma_q][mma_kv][3], bnd32+thrd4+3) +
                  __shfl(s_frag[mma_q][mma_kv][6], bnd32+thrd4+3) +
-                 __shfl(s_frag[mma_q][mma_kv][7], bnd32+thrd4+3);
+                 __shfl(s_frag[mma_q][mma_kv][7], bnd32+thrd4+3);*/
 
                  d[mma_q][0] += rwsm0;
                  d[mma_q][1] += rwsm1;
-
         } else {
 //FIXME
 #if 0  // disable MMA on ROCm platform
@@ -1069,6 +1169,7 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
 //swizzle s_frag_f16 to a layout that matches our mma reprudcer
   typedef union b128_h {
           b128_t b128;
+          __hip_bfloat16 bf[8];
           __half h[8];
           uint32_t i[4];
           __device__ b128_h() { memset( this, 0, sizeof( b128_h ) ); }
@@ -1085,8 +1186,7 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
       int thrd4 = threadIdx.x%4;
       int bnd4  = (threadIdx.x/4)*4;
       int bnd32 = (threadIdx.y%2)*32;
-      //lanes 0-8
-      half tmp[4][8];
+      half tmp[4][8]; 
       //lane 0-7
           for (int se=0; se<8; se++)
                 tmp[0][se] = __shfl(s_frag_f16[mma_q][mma_kv][se%2],   bnd32+(threadIdx.x%32)*4+se/2);
@@ -1112,7 +1212,44 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
       else if (threadIdx.x%32 >= 24 && threadIdx.x%32<32)
 	      for (int se=0; se<8; se++)
 	          s_frag_f16[mma_q][mma_kv][se] = tmp[3][se];
- 
+    }  
+    else if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
+
+      int thrd4 = threadIdx.x%4;
+      int bnd4  = (threadIdx.x/4)*4;
+      int bnd32 = (threadIdx.y%2)*32;
+      typedef union hfbhf {
+          __hip_bfloat16 bf;
+          __half h;
+	  __device__ hfbhf() { memset( this, 0, sizeof( hfbhf ) ); }
+      };
+      hfbhf pnrhbh;
+      hfbhf tmp[4][8]; 
+      //lane 0-7
+          for (int se=0; se<8; se++)
+	       { pnrhbh.bf = s_frag_f16[mma_q][mma_kv][se%2]; tmp[0][se].h = __shfl(pnrhbh.h,   bnd32+(threadIdx.x%32)*4+se/2);}
+      //lane 8-15
+          for (int se=0; se<8; se++)
+	       { pnrhbh.bf = s_frag_f16[mma_q][mma_kv][se%2+2]; tmp[1][se].h = __shfl(pnrhbh.h, bnd32+(threadIdx.x%32-8)*4+se/2);}
+      //lane 16-23
+          for (int se=0; se<8; se++)
+	       { pnrhbh.bf = s_frag_f16[mma_q][mma_kv][se%2+4]; tmp[2][se].h = __shfl(pnrhbh.h, bnd32+(threadIdx.x%32-16)*4+se/2);}
+      //lane 24-31
+          for (int se=0; se<8; se++)
+	       { pnrhbh.bf = s_frag_f16[mma_q][mma_kv][se%2+6]; tmp[3][se].h = __shfl(pnrhbh.h, bnd32+(threadIdx.x%32-24)*4+se/2);}
+      
+      if (threadIdx.x%32 < 8)
+	      for (int se=0; se<8; se++)
+	          s_frag_f16[mma_q][mma_kv][se] = tmp[0][se].bf;
+      else if (threadIdx.x%32 >= 8 && threadIdx.x%32<16)
+	      for (int se=0; se<8; se++)
+	          s_frag_f16[mma_q][mma_kv][se] = tmp[1][se].bf;
+      else if (threadIdx.x%32 >= 16 && threadIdx.x%32<24)
+	      for (int se=0; se<8; se++)
+	          s_frag_f16[mma_q][mma_kv][se] = tmp[2][se].bf;
+      else if (threadIdx.x%32 >= 24 && threadIdx.x%32<32)
+	      for (int se=0; se<8; se++)
+	          s_frag_f16[mma_q][mma_kv][se] = tmp[3][se].bf;
     }  
     }
   }
@@ -1189,7 +1326,6 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
               o_frag[mma_q][mma_d], (uint32_t*)(s_frag_f16[mma_q][mma_kv]), b_frag);
 #endif // disable MMA on ROCm platform
 
-
       int bnd32 = (threadIdx.y%2)*32;
       int bnd16 = (threadIdx.x/16)*16;
       int bnd8 = (threadIdx.x/8)*8;
@@ -1203,6 +1339,45 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
 	    float tmp1[8] = {0,0,0,0,0,0,0,0};
 	    float tmp2[8] = {0,0,0,0,0,0,0,0};
 	    float tmp3[8] = {0,0,0,0,0,0,0,0};
+            if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
+	    for (int se=0; se<8; se++) { 
+	    for (int ie=0; ie<8; ie++) { 
+              //lanes:0-8
+	      tmp0[se] += 
+	         __bfloat162float(s_frag_f16[mma_q][mma_kv][ie]) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+se);
+	      tmp0[se] +=
+	         __shfl(__bfloat162float(s_frag_f16[mma_q][mma_kv][ie]), bnd32+bnd16+16+thrd8) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+8+se);
+
+	      //lanes:8-16
+	      tmp1[se] += 
+	         __bfloat162float(s_frag_f16[mma_q][mma_kv][ie]) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+8+se);
+	      tmp1[se] +=
+                 __shfl(__bfloat162float(s_frag_f16[mma_q][mma_kv][ie]), bnd32+bnd16+16+8+thrd8) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+16+se);
+
+	      //lanes:16-24
+	      tmp2[se] += 
+	         __shfl(__bfloat162float(s_frag_f16[mma_q][mma_kv][ie]), bnd32+threadIdx.x-16) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+se);
+	      tmp2[se] +=
+                 __bfloat162float(s_frag_f16[mma_q][mma_kv][ie]) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8+8+se);
+
+	      //lanes:24-32
+	      tmp3[se] += 
+	         __shfl(__bfloat162float(s_frag_f16[mma_q][mma_kv][ie]), bnd32+threadIdx.x-16) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8-24+se);
+	      tmp3[se] +=
+                 __bfloat162float(s_frag_f16[mma_q][mma_kv][ie]) * 
+	         __shfl(__bfloat162float(b128_h_b_frag.bf[ie]), bnd32+bnd8-16+se);
+	    }
+	    }
+
+	    }
+	    else {
 	    for (int se=0; se<8; se++) { 
 	    for (int ie=0; ie<8; ie++) { 
 	      //lanes:0-8
@@ -1237,6 +1412,7 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
                  __half2float(s_frag_f16[mma_q][mma_kv][ie]) * 
 	         __shfl(__half2float(b128_h_b_frag.h[ie]), bnd32+bnd8-16+se);
 
+	    }
 	    }
 	    }
 
@@ -1486,8 +1662,9 @@ __device__ __forceinline__ void write_o_reg_gmem(
         uint32_t o_frag_f16[4];
         //vec_cast<DTypeO, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
 //hipFIXED
-        if constexpr(std::is_same<DTypeO, __half>::value)
-        vec_cast<__half, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
+        //if constexpr(std::is_same<DTypeO, __half>::value)
+        //vec_cast<__half, float>::cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
+	vec_cast<DTypeO, float>::template cast<8>((DTypeO*)o_frag_f16, o_frag[mma_q][mma_d]);
 #ifdef FLASHINFER_STMATRIX_M8N8X4_ENABLED
         uint32_t o_smem_offset_w = o_smem->template get_permuted_offset<channel_size_128b_out>(
             (warp_idx_x * NUM_MMA_Q + mma_q) * 16 + lane_idx % 16, mma_d * 2 + lane_idx / 16);
@@ -1995,10 +2172,12 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     const __grid_constant__ typename AttentionVariant::ParamsT params) {
 #endif
   using DTypeQ = typename AttentionVariant::DTypeQ;
-#if (__CUDA_ARCH__ < 800)
-  if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
-    FLASHINFER_RUNTIME_ASSERT("Prefill kernels do not support bf16 on sm75.");
-  } else {
+#if !(defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__))
+  #if (__CUDA_ARCH__ < 800)
+    if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
+      FLASHINFER_RUNTIME_ASSERT("Prefill kernels do not support bf16 on sm75.");
+    } else {
+  #endif
 #endif
     using DTypeKV = typename AttentionVariant::DTypeKV;
     using DTypeO = typename AttentionVariant::DTypeO;
@@ -2231,7 +2410,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
 
       // compute sfm*v
       compute_sfm_v<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_kv, DTypeQ, DTypeKV>(
-          variant, &v_smem, &v_smem_offset_r, s_frag, o_frag, d);
+          variant, &v_smem, &v_smem_offset_r, s_frag, o_frag, d, iter);
 
       block.sync();
       page_produce_kv<true, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
@@ -2285,10 +2464,10 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
         }
       }
     }
-if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0 && blockIdx.x==0 && blockIdx.y==0)
-    printf("hello5!");
-#if (__CUDA_ARCH__ < 800)
-  }
+#if !(defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__))
+  #if (__CUDA_ARCH__ < 800)
+    }
+  #endif
 #endif
 }
 
@@ -2401,7 +2580,6 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
   using DTypeQ = typename AttentionVariant::DTypeQ;
   using DTypeKV = typename AttentionVariant::DTypeKV;
   using DTypeO = typename AttentionVariant::DTypeO;
-  printf("\nDTYPS:<<<<%s,%s,%s>>>>>>>\n", typeid(DTypeQ).name(), typeid(DTypeKV).name(), typeid(DTypeO).name());
   const uint32_t padded_batch_size = params.padded_batch_size;
   const uint32_t num_qo_heads = params.num_qo_heads;
   const uint32_t num_kv_heads = params.paged_kv.num_heads;
@@ -2466,7 +2644,7 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
                                              AttentionVariant>;
       FLASHINFER_CUDA_CALL(
           gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
-      if (tmp_v == nullptr) {
+      if (true /*tmp_v == nullptr*/) {
         // do not partition kv
         params.partition_kv = false;
         void* args[] = {(void*)&group_size_fastdiv, (void*)&params};
@@ -2481,6 +2659,7 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
         void* args[] = {(void*)&group_size_fastdiv, (void*)&params};
         FLASHINFER_CUDA_CALL(
             gpuLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
+        gpuDeviceSynchronize();
         if constexpr (AttentionVariant::use_softmax) {
           FLASHINFER_CUDA_CALL(VariableLengthMergeStates(
               tmp_v, tmp_s, params.merge_indptr, o, lse, params.max_total_num_rows,
