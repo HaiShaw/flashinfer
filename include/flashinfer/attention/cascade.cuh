@@ -464,6 +464,7 @@ __global__ void PersistentVariableLengthMergeStatesKernel(
     threadblock_sync_state<bdx, bdy, vec_size>(st, v_smem, s_smem);
     st.normalize();
 
+    __builtin_amdgcn_s_barrier();
     st.o.cast_store(v_merged + (pos * num_heads + head_idx) * head_dim + tx * vec_size);
     if (s_merged != nullptr) {
       s_merged[pos * num_heads + head_idx] = st.get_lse();
