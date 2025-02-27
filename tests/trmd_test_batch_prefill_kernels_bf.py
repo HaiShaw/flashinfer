@@ -62,9 +62,9 @@ def ref_masked_attention(
     out = torch.einsum("hqk,khd->qhd", attn_weights, value.float())
     return out.to(query)
 
-@pytest.mark.parametrize("batch_size", [15])
-@pytest.mark.parametrize("kv_len", [128])
-@pytest.mark.parametrize("qo_len", [16])
+@pytest.mark.parametrize("batch_size", range(32,0,-1))
+@pytest.mark.parametrize("kv_len", [256])
+@pytest.mark.parametrize("qo_len", [64])
 @pytest.mark.parametrize("page_size", [1])
 @pytest.mark.parametrize("num_qo_kv_heads", [(4,1)])
 @pytest.mark.parametrize("head_dim", [64])
@@ -75,7 +75,7 @@ def ref_masked_attention(
 @pytest.mark.parametrize("logits_soft_cap", [0.0])
 @pytest.mark.parametrize("return_lse", [False])
 @pytest.mark.parametrize("contiguous_kv", [True])
-@pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_batch_prefill_with_paged_kv_cache(
     batch_size,
     kv_len,
@@ -264,16 +264,14 @@ def test_batch_prefill_with_paged_kv_cache(
             dim=0,
         ).to(dtype)
         # FIXME: add back single_prefill_with_kv_cache() call after finish implementation
-        """
-        o_ref_i = flashinfer.prefill.single_prefill_with_kv_cache(
+        """o_ref_i = flashinfer.prefill.single_prefill_with_kv_cache(
             qi,
             ki,
             vi,
             causal=causal,
             pos_encoding_mode=pos_encoding_mode,
             logits_soft_cap=logits_soft_cap,
-        )
-        """
+        )"""
         # NOTICE: for now, we use alibi_attention() as reference function
         assert not causal
         assert pos_encoding_mode == 'NONE'
@@ -284,6 +282,9 @@ def test_batch_prefill_with_paged_kv_cache(
 
         o_ref_i = ref_masked_attention(qi, ki, vi, logits_soft_cap)
         o_i = o[q_indptr_cpu[i] : q_indptr_cpu[i + 1]]
+        
+        #print("output",i,":",o_i)
+        #print("refrnc",i,":",o_ref_i)
         torch.testing.assert_close(o_i, o_ref_i, rtol=rtol, atol=atol)
 
 '''

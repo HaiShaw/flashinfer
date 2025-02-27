@@ -1025,7 +1025,6 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
                                               float (*o_frag)[NUM_MMA_D][8], float (*d)[2], int iter=1000) {
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
   constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
-
   DTypeQ s_frag_f16[NUM_MMA_Q][NUM_MMA_KV][8];
   if constexpr (std::is_same_v<DTypeQKAccum, float>) {
 #pragma unroll
@@ -1461,7 +1460,6 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
                 tmp[3] = __shfl(tmp4[se+3*2-6], bnd32+8+threadIdx.x/4);
                 (reinterpret_cast<float*>(&o_frag[mma_q][mma_d])[se]) += tmp[thrd4];
 	    }
-
         } else {
 //FIXME
 #if 0  // disable MMA on ROCm platform
@@ -1500,7 +1498,6 @@ __device__ __forceinline__ void normalize_d(AttentionVariant variant, float (*o_
             (m[mma_q][j] != DTypeQKAccum(-math::inf)) ? math::ptx_rcp(d[mma_q][j]) : 0.f;
       }
     }
-
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
@@ -2644,7 +2641,7 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
                                              AttentionVariant>;
       FLASHINFER_CUDA_CALL(
           gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
-      if (true /*tmp_v == nullptr*/) {
+      if (tmp_v == nullptr) {
         // do not partition kv
         params.partition_kv = false;
         void* args[] = {(void*)&group_size_fastdiv, (void*)&params};
@@ -2659,7 +2656,6 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
         void* args[] = {(void*)&group_size_fastdiv, (void*)&params};
         FLASHINFER_CUDA_CALL(
             gpuLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
-        gpuDeviceSynchronize();
         if constexpr (AttentionVariant::use_softmax) {
           FLASHINFER_CUDA_CALL(VariableLengthMergeStates(
               tmp_v, tmp_s, params.merge_indptr, o, lse, params.max_total_num_rows,
