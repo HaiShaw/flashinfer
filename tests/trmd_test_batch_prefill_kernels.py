@@ -343,7 +343,7 @@ def test_batch_prefill_with_paged_kv_cache(
         assert pos_encoding_mode == 'NONE'
         assert not return_lse
 
-        rtol, atol = (1e-3, 1e-3) if dtype == torch.float16 else (15e-2, 15e-2)
+        rtol, atol = (1e-3, 1e-3) if dtype == torch.float16 else (1e-2, 1e-2)
 
         # enlarge tolerance to pass very few outputs while checking
         if causal:
