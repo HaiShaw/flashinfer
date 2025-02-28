@@ -20,8 +20,8 @@ _FUNC_ARGS = r"""
     const std::string& kv_cache_dtype,
     const std::string& kv_cache_layout,
     float logits_soft_cap,
-    at::Tensor& k_scale,
-    at::Tensor& v_scale,
+    const c10::optional<at::Tensor>& k_scale,
+    const c10::optional<at::Tensor>& v_scale,
     const c10::optional<at::Tensor>& fp8_out_scale,
     int64_t partition_size,
     int64_t cuda_stream
@@ -1424,8 +1424,8 @@ void {{func_name}}({{func_args}}) {
     int* kv_page_indices_ptr   = kv_page_indices.data_ptr<int>();
     int* kv_last_page_lens_ptr = BLOCK_SIZE > 1 ? kv_last_page_lens.value().data_ptr<int>() : nullptr;
 
-    const float* k_scale_ptr = reinterpret_cast<const float*>(k_scale.data_ptr());
-    const float* v_scale_ptr = reinterpret_cast<const float*>(v_scale.data_ptr());
+    const float* k_scale_ptr = k_scale ? reinterpret_cast<const float*>(k_scale->data_ptr()) : nullptr;
+    const float* v_scale_ptr = v_scale ? reinterpret_cast<const float*>(v_scale->data_ptr()) : nullptr;
     const float* fp8_out_scale_ptr =
         fp8_out_scale ? reinterpret_cast<const float*>(fp8_out_scale.value().data_ptr()) : nullptr;
     OUTT* out_ptr = reinterpret_cast<OUTT*>(out.data_ptr());

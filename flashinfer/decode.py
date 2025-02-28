@@ -1498,6 +1498,8 @@ class AiterDecodeWithPagedKVCacheWrapper:
         key_cache, value_cache = _unpack_paged_kv_cache(paged_kv_cache, self._kv_layout)
 
         out: torch.Tensor = torch.empty_like(q)
+        if q_scale is None:
+            q_scale = torch.rsqrt(torch.tensor(self.head_dim, dtype=torch.float64)).item()
         self._run_internal(
             out,
             self._float_workspace_buffer,
@@ -1513,7 +1515,7 @@ class AiterDecodeWithPagedKVCacheWrapper:
             None,  # alibi_slopes,
             "unused",  # kv_cache_dtype,
             self._kv_layout,  # kv_cache_layout
-            None,  # logits_soft_cap,
+            0.0,  # logits_soft_cap,
             k_scale,
             v_scale,
             None,  # fp8_out_scale,
