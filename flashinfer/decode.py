@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from collections import namedtuple
 import functools
 import math
 from types import SimpleNamespace
@@ -52,6 +53,7 @@ from .utils import (
 _single_decode_modules = {}
 _batch_decode_modules = {}
 _batch_decode_mla_modules = {}
+_aiter_decode_modules = {}
 
 
 def get_single_decode_module(*args):
@@ -1411,3 +1413,132 @@ class BatchDecodeMlaWithPagedKVCacheWrapper:
         return tuple(out) if return_lse else out[0]
 
     run_return_lse = functools.partialmethod(run, return_lse=True)
+
+
+def get_aiter_decode_module(**kwargs):
+    global _aiter_decode_modules
+    Key = namedtuple('AiterDecodeModulesKey', ' '.join(kwargs.keys()))
+    key = Key(**kwargs)
+    if key not in _aiter_decode_modules:
+        from .jit import gen_aiter_decode_module
+        _aiter_decode_modules[key] = gen_aiter_decode_module(**kwargs)
+    return _aiter_decode_modules[key]
+
+
+class AiterDecodeWithPagedKVCacheWrapper:
+    def __init__(
+        self,
+        float_workspace_buffer: torch.Tensor,
+        kv_layout: str = "NHD",
+    ):
+        self._float_workspace_buffer = float_workspace_buffer
+        self._device = float_workspace_buffer.device
+        self._kv_layout = kv_layout
+        self._cached_module = None
+        self._run_internal = None
+
+    def plan(
+        self,
+        kv_indptr: torch.Tensor,
+        kv_page_indices: torch.Tensor,
+        kv_last_page_lens: torch.Tensor,
+        num_qo_heads: int,
+        num_kv_heads: int,
+        head_dim: int,
+        page_size: int,
+        q_data_type: Optional[Union[str, torch.dtype]] = "float16",
+        kv_data_type: Optional[Union[str, torch.dtype]] = None,
+        partition_size: int = 256,
+        max_context_len: int = 2 ** 17,
+    ):
+        self.dtype_q: torch.dtype = canonicalize_torch_dtype(q_data_type)
+        if kv_data_type is not None:
+            self.dtype_kv: torch.dtype = canonicalize_torch_dtype(kv_data_type)
+        else:
+            self.dtype_kv = self.dtype_q
+        self.dtype_o: torch.dtype = self.dtype_q
+        self.head_dim: int = head_dim
+        self.block_size: int = page_size
+        self.alibi_enabled: bool = False
+        self.logits_soft_cap_enabled: bool = False
+
+        self.gqa_ratio: int = num_qo_heads // num_kv_heads
+        assert 0 == num_qo_heads % num_kv_heads
+
+        self.kv_indptr = kv_indptr
+        self.kv_page_indices = kv_page_indices
+        self.kv_last_page_lens = kv_last_page_lens
+
+        self.partition_size = partition_size
+        self.max_num_partitions = (
+            max_context_len + self.partition_size - 1
+        ) // self.partition_size
+
+        self._cached_module = get_aiter_decode_module(
+            dtype_q=self.dtype_q,
+            dtype_kv=self.dtype_kv,
+            dtype_o=self.dtype_o,
+            head_dim=self.head_dim,
+            block_size=self.block_size,
+            alibi_enabled=self.alibi_enabled,
+            logits_soft_cap_enabled=self.logits_soft_cap_enabled,
+            gqa_ratio=self.gqa_ratio,
+        )
+        self._run_internal = self._cached_module.run
+
+    def run(
+        self,
+        q: torch.Tensor,
+        paged_kv_cache: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
+        q_scale: Optional[float] = None,
+        k_scale: Optional[float] = None,
+        v_scale: Optional[float] = None,
+     ):
+        assert self._run_internal is not None
+        key_cache, value_cache = _unpack_paged_kv_cache(paged_kv_cache)
+        # at::Tensor& out, // [num_seqs, num_heads, head_size]
+        # at::Tensor& workspace_buffer,
+        # at::Tensor& query,       // [num_seqs, num_heads, head_size]
+        # at::Tensor& key_cache,   // [num_blocks, num_heads, block_size, head_size] or
+        #                             // [num_blocks, block_size, num_heads, head_size]
+        # at::Tensor& value_cache, // [num_blocks, num_heads, block_size, head_size] or
+        #                             // [num_blocks, block_size, num_heads, head_size]
+        # double scale,
+        # at::Tensor& kv_indptr,         // [num_seqs + 1]
+        # at::Tensor& kv_page_indices,   // [max_num_blocks]
+        # std::optional<at::Tensor>& kv_last_page_lens, // [num_seqs]
+        # int64_t block_size,
+        # int64_t max_num_partitions,
+        # const std::optional<at::Tensor>& alibi_slopes,
+        # const std::string& kv_cache_dtype,
+        # const std::string& kv_cache_layout,
+        # float logits_soft_cap,
+        # at::Tensor& k_scale,
+        # at::Tensor& v_scale,
+        # const c10::optional<at::Tensor>& fp8_out_scale,
+        # int64_t partition_size,
+        # int64_t cuda_stream
+        out: torch.Tensor = torch.empty_like(q)
+        self._run_internal(
+            out,
+            self._float_workspace_buffer,
+            q,
+            key_cache,
+            value_cache,
+            q_scale,
+            self.kv_indptr,
+            self.kv_page_indices,
+            self.kv_last_page_lens,
+            self.block_size,
+            self.max_num_partitions,
+            None,  # alibi_slopes,
+            "unused",  # kv_cache_dtype,
+            self._kv_layout,  # kv_cache_layout
+            None,  # logits_soft_cap,
+            k_scale,
+            v_scale,
+            None,  # fp8_out_scale,
+            self.partition_size,
+            get_cuda_stream(self._device),
+        )
+        return out
