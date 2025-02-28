@@ -92,3 +92,20 @@ def test_aiter_batch_decode_with_paged_kv_cache(
     )
 
     o = wrapper.run(q, kv_data)
+
+
+if __name__ == "__main__":
+    test_aiter_batch_decode_with_paged_kv_cache(
+        batch_size=256,
+        kv_len=54,
+        page_size=8,
+        num_kv_heads=8,
+        num_qo_heads=8,
+        head_dim=128,
+        kv_layout="NHD",
+        pos_encoding_mode="NONE",
+        logits_soft_cap=0.0,
+        q_dtype=torch.float16,
+        kv_dtype=torch.float16,
+        contiguous_kv=True,
+    )
