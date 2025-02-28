@@ -1022,8 +1022,8 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
           mma::rowsum_f16f16f32(d[mma_q], s_frag_f16[mma_q][mma_kv]);
 #else
           DTypeQKAccum local_rowsum = (
-            s_frag[mma_q][mma_kv][0] + s_frag[mma_q][mma_kv][1] +
-            s_frag[mma_q][mma_kv][2] + s_frag[mma_q][mma_kv][3]
+            T2float<DTypeQ>(s_frag_f16[mma_q][mma_kv][0]) + T2float<DTypeQ>(s_frag_f16[mma_q][mma_kv][1]) + 
+            T2float<DTypeQ>(s_frag_f16[mma_q][mma_kv][2]) + T2float<DTypeQ>(s_frag_f16[mma_q][mma_kv][3])
           );
           local_rowsum = local_rowsum + math::shfl_xor_sync(local_rowsum, 0x10);
           local_rowsum = local_rowsum + math::shfl_xor_sync(local_rowsum, 0x20);
