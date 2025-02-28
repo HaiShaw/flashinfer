@@ -13,10 +13,10 @@ _FUNC_ARGS = r"""
     double scale,
     at::Tensor& kv_indptr,         // [num_seqs + 1]
     at::Tensor& kv_page_indices,   // [max_num_blocks]
-    std::optional<at::Tensor>& kv_last_page_lens, // [num_seqs]
+    c10::optional<at::Tensor>& kv_last_page_lens, // [num_seqs]
     int64_t block_size,
     int64_t max_num_partitions,
-    const std::optional<at::Tensor>& alibi_slopes,
+    const c10::optional<at::Tensor>& alibi_slopes,
     const std::string& kv_cache_dtype,
     const std::string& kv_cache_layout,
     float logits_soft_cap,

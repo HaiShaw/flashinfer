@@ -1446,6 +1446,9 @@ class AiterDecodeWithPagedKVCacheWrapper:
         num_kv_heads: int,
         head_dim: int,
         page_size: int,
+        pos_encoding_mode: str = "NONE",
+        window_left: int = -1,
+        logits_soft_cap: Optional[float] = None,
         q_data_type: Optional[Union[str, torch.dtype]] = "float16",
         kv_data_type: Optional[Union[str, torch.dtype]] = None,
         partition_size: int = 256,
@@ -1459,8 +1462,9 @@ class AiterDecodeWithPagedKVCacheWrapper:
         self.dtype_o: torch.dtype = self.dtype_q
         self.head_dim: int = head_dim
         self.block_size: int = page_size
-        self.alibi_enabled: bool = False
-        self.logits_soft_cap_enabled: bool = False
+        self.alibi_enabled: bool = "ALIBI" in pos_encoding_mode
+        self.logits_soft_cap: float = logits_soft_cap or 0.0
+        self.logits_soft_cap_enabled: bool = self.logits_soft_cap > 0.0
 
         self.gqa_ratio: int = num_qo_heads // num_kv_heads
         assert 0 == num_qo_heads % num_kv_heads
@@ -1515,7 +1519,7 @@ class AiterDecodeWithPagedKVCacheWrapper:
             None,  # alibi_slopes,
             "unused",  # kv_cache_dtype,
             self._kv_layout,  # kv_cache_layout
-            0.0,  # logits_soft_cap,
+            self.logits_soft_cap,
             k_scale,
             v_scale,
             None,  # fp8_out_scale,

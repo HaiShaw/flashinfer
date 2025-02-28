@@ -122,9 +122,10 @@ def load_cuda_ops(
     extra_ldflags=None,
     extra_include_paths=None,
     verbose=False,
+    debug=False,
 ):
-    cflags = ["-O3"]
-    cuda_cflags = ["-O3", "-std=c++17", "-DFLASHINFER_ENABLE_BF16", "-DFLASHINFER_ENABLE_FP8"]
+    cflags = []
+    cuda_cflags = ["-std=c++17", "-DFLASHINFER_ENABLE_BF16", "-DFLASHINFER_ENABLE_FP8"]
     with_cuda = True
     if check_hip_availability():
         print("Setting extra flags for ROCm/HIP")
@@ -137,6 +138,13 @@ def load_cuda_ops(
         print("Setting extra flags for CUDA")
         cflags += ["-Wno-switch-bool"]
         cuda_cflags += ["--threads", "4", "-use_fast_math"]
+
+    if debug:
+        opt_flags = ["-O0 -ggdb"]
+    else:
+        opt_flags = ["-O3"]
+    cflags.extend(opt_flags)
+    cuda_cflags.extend(opt_flags)
 
     cflags += extra_cflags
     cuda_cflags += extra_cuda_cflags
@@ -155,6 +163,9 @@ def load_cuda_ops(
     ]
     if check_cuda_availability():
         extra_include_paths += CUTLASS_INCLUDE_DIRS
+    # extra_include_paths.append("/flashinfer/csrc/")
+    # extra_include_paths.append("/flashinfer/include")
+    # print(f"{extra_include_paths=}")
     lock = FileLock(FLASHINFER_JIT_DIR / f"{name}.lock", thread_local=False)
     with lock:
         module = torch_cpp_ext.load(

@@ -85,8 +85,8 @@ def test_aiter_batch_decode_with_paged_kv_cache(
         num_kv_heads,
         head_dim,
         page_size,
-        # logits_soft_cap=logits_soft_cap,
-        # pos_encoding_mode=pos_encoding_mode,
+        logits_soft_cap=logits_soft_cap,
+        pos_encoding_mode=pos_encoding_mode,
         kv_data_type=kv_dtype,
         q_data_type=q_dtype,
     )
