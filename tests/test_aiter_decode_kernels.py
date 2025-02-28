@@ -94,18 +94,64 @@ def test_aiter_batch_decode_with_paged_kv_cache(
     o = wrapper.run(q, kv_data)
 
 
+def run_example(
+    *,
+    workspace_size=128 * 1024 * 1024,
+    max_num_pages=128,
+    kv_last_page_lens=[1, 7, 14, 4, 3, 1, 16],
+    kv_page_indptrs=[0, 17, 29, 44, 48, 66, 100, 128],
+    num_kv_heads=8,
+    num_qo_heads=64,
+    head_dim=128,
+    page_size=16,
+    batch_size=7,
+    num_layers=32,
+    q_dtype=torch.float16,
+    kv_dtype=torch.float16,
+):
+    workspace_buffer = torch.empty(workspace_size, dtype=torch.uint8, device="cuda:0")
+    decode_wrapper = flashinfer.decode.AiterDecodeWithPagedKVCacheWrapper(workspace_buffer, "NHD")
+
+    kv_page_indices = torch.arange(max_num_pages).int().to("cuda:0")
+    kv_last_page_len = torch.tensor(kv_last_page_lens, dtype=torch.int32, device="cuda:0")
+
+    kv_page_indptr = torch.tensor(kv_page_indptrs, dtype=torch.int32, device="cuda:0")
+
+    decode_wrapper.plan(kv_page_indptr,
+                        kv_page_indices,
+                        kv_last_page_len,
+                        num_qo_heads,
+                        num_kv_heads,
+                        head_dim,
+                        page_size)
+
+    kv_cache_at_layer = [
+        torch.randn(
+            max_num_pages, 2, page_size, num_kv_heads, head_dim, dtype=kv_dtype, device="cuda:0"
+        ) for _ in range(num_layers)
+    ]
+
+    outputs = []
+    for i in range(num_layers):
+        q = torch.randn(batch_size, num_qo_heads, head_dim, dtype=q_dtype, device="cuda:0")
+        kv_cache = kv_cache_at_layer[i]
+        o = decode_wrapper.run(q, kv_cache)
+        outputs.append(o)
+
+
 if __name__ == "__main__":
-    test_aiter_batch_decode_with_paged_kv_cache(
-        batch_size=256,
-        kv_len=54,
-        page_size=8,
-        num_kv_heads=8,
-        num_qo_heads=8,
-        head_dim=128,
-        kv_layout="NHD",
-        pos_encoding_mode="NONE",
-        logits_soft_cap=0.0,
-        q_dtype=torch.float16,
-        kv_dtype=torch.float16,
-        contiguous_kv=True,
-    )
+    # test_aiter_batch_decode_with_paged_kv_cache(
+    #     batch_size=256,
+    #     kv_len=54,
+    #     page_size=8,
+    #     num_kv_heads=8,
+    #     num_qo_heads=8,
+    #     head_dim=128,
+    #     kv_layout="NHD",
+    #     pos_encoding_mode="NONE",
+    #     logits_soft_cap=0.0,
+    #     q_dtype=torch.float16,
+    #     kv_dtype=torch.float16,
+    #     contiguous_kv=True,
+    # )
+    run_example()
