@@ -1495,7 +1495,7 @@ class AiterDecodeWithPagedKVCacheWrapper:
         v_scale: Optional[float] = None,
      ):
         assert self._run_internal is not None
-        key_cache, value_cache = _unpack_paged_kv_cache(paged_kv_cache)
+        key_cache, value_cache = _unpack_paged_kv_cache(paged_kv_cache, self._kv_layout)
         # at::Tensor& out, // [num_seqs, num_heads, head_size]
         # at::Tensor& workspace_buffer,
         # at::Tensor& query,       // [num_seqs, num_heads, head_size]
