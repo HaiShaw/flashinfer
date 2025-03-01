@@ -158,8 +158,12 @@ def test_batch_prefill_with_paged_kv_cache(
     if seed is not None:
         torch.manual_seed(seed)
 
+    def convert_lens_to_indtpr(lens):
+        return torch.cumsum(torch.cat((torch.tensor([0]), lens)), dim=0).int()
+
     q = torch.randn(batch_size * qo_len, num_qo_heads, head_dim).to(dtype).to(0)
-    q_indptr_cpu = torch.arange(0, batch_size + 1).int() * qo_len
+    qo_lens = torch.randint(1, qo_len + 1, (batch_size,))
+    q_indptr_cpu = convert_lens_to_indtpr(qo_lens)
     num_pages_per_seq = (kv_len + page_size - 1) // page_size
     total_num_pages = num_pages_per_seq * batch_size
     if kv_layout == "HND":
