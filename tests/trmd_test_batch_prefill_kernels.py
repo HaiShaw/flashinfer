@@ -137,8 +137,7 @@ def ref_masked_attention(
 @pytest.mark.parametrize("contiguous_kv", [True])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("q_init_min,q_init_max", [(-3, 3)])
-@pytest.mark.parametrize("k_init_min,k_init_max", [(-3, 3)])
-@pytest.mark.parametrize("v_init_min,v_init_max", [(-3, 3)])
+@pytest.mark.parametrize("kv_init_min,kv_init_max", [(-3, 3)])
 @pytest.mark.parametrize("seed", [123])
 def test_batch_prefill_with_paged_kv_cache(
     batch_size,
@@ -158,10 +157,8 @@ def test_batch_prefill_with_paged_kv_cache(
     dtype,
     q_init_min,
     q_init_max,
-    k_init_min,
-    k_init_max,
-    v_init_min,
-    v_init_max,
+    kv_init_min,
+    kv_init_max,
     seed
 ):
     if seed is not None:
@@ -193,7 +190,7 @@ def test_batch_prefill_with_paged_kv_cache(
             tmp.append(2)
             tmp.append(v)
         kv_shape = tmp
-        kv_data_fp32 = create_tensor(k_init_min, k_init_max, *kv_shape, dtype=torch.float32).to(0)
+        kv_data_fp32 = create_tensor(kv_init_min, kv_init_max, *kv_shape, dtype=torch.float32).to(0)
         kv_data = kv_data_fp32.to(dtype)
         kv_data = kv_data[:, 1, :, 1, :, 1, :, 1, :]
         kv_data_fp32 = kv_data_fp32[:, 1, :, 1, :, 1, :, 1, :]
@@ -203,7 +200,7 @@ def test_batch_prefill_with_paged_kv_cache(
             != kv_data.shape[-3] * kv_data.shape[-2] * kv_data.shape[-1]
         )
     else:
-        kv_data_fp32 = create_tensor(k_init_min, k_init_max, *kv_shape, dtype=torch.float32).to(0)
+        kv_data_fp32 = create_tensor(kv_init_min, kv_init_max, *kv_shape, dtype=torch.float32).to(0)
         kv_data = kv_data_fp32.to(dtype)
     kv_indptr_cpu = torch.arange(0, batch_size + 1).int() * num_pages_per_seq
     kv_indices_cpu = torch.arange(0, total_num_pages).int()
