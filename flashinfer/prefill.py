@@ -1428,7 +1428,6 @@ class BatchPrefillWithPagedKVCacheWrapper:
         if self._backend == "fa2":
             self._cached_module = get_batch_prefill_module(*get_module_args)
             with self.device as device:
-                print(".")
                 self._plan_info = self._cached_module.plan(
                     self._float_workspace_buffer,
                     self._int_workspace_buffer,
@@ -1443,6 +1442,19 @@ class BatchPrefillWithPagedKVCacheWrapper:
                     self.is_cuda_graph_enabled,
                     get_cuda_stream(device),
                 )
+                
+            print("================inside BatchPrefillWithPagedKVCacheWrapper.plan()===================")
+            print("batch size: ", batch_size)
+            print("num_qo_heads: ", num_qo_heads)
+            print("num_kv_heads: ", num_kv_heads)
+            qo_lens = (qo_indptr_host[1:] - qo_indptr_host[:-1])
+            print("max qo_len: ", qo_lens.max())
+            kv_lens = (paged_kv_indptr_host[1:] - paged_kv_indptr_host[:-1])
+            print("max kv_len: ", kv_lens.max())
+            
+    
+            
+        
         else:
             self._cached_module = get_batch_prefill_sm90_module(*get_module_args)
             paged_kv_last_page_len_host = paged_kv_last_page_len.to("cpu")
@@ -1466,6 +1478,9 @@ class BatchPrefillWithPagedKVCacheWrapper:
             else:
                 vector_sparse_indptr_host = paged_kv_indptr_host
 
+
+            
+            
             with self.device as device:
                 self._plan_info = self._cached_module.plan(
                     causal,
@@ -1666,7 +1681,18 @@ class BatchPrefillWithPagedKVCacheWrapper:
 
         if v_scale is not None:
             out *= v_scale
+            
+        print("==========================inside BatchPrefillWithPagedKVCacheWrapper.run()============================\n")
+        print("q shape: ", q.shape)
+        print("q max value {}, q min value {}".format(q.max(), q.min()))
+        print("k shape: ", k_cache.shape)
+        print("k max value: {}, k min value {}".format(k_cache.max(), k_cache.min()))
+        print("v shape: ", v_cache.shape)
+        print("v max value: {}, v min value {}".format(v_cache.max(), v_cache.min()))
+        print("logits cap value: ", logits_soft_cap)
 
+        
+        
         return (out, lse) if return_lse else out
 
     run_return_lse = functools.partialmethod(run, return_lse=True)
