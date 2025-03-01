@@ -167,6 +167,9 @@ def test_batch_prefill_with_paged_kv_cache(
     if seed is not None:
         torch.manual_seed(seed)
 
+    if causal and kv_len < qo_len:
+        pytest.skip('kv_len < qo_len is not allowed if causal=True')
+
     def create_tensor(min, max, *args, **kwargs):
         return (min + (max - max) * torch.rand(*args, **kwargs))
 
