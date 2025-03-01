@@ -171,7 +171,9 @@ def test_batch_prefill_with_paged_kv_cache(
         pytest.skip('kv_len < qo_len is not allowed if causal=True')
 
     def create_tensor(min, max, *args, **kwargs):
-        return (min + (max - min) * torch.rand(*args, **kwargs))
+        x = torch.randn(*args, **kwargs)
+        x = (x - x.min()) / (x.max() - x.min())
+        return (min + (max - min) * x)
 
     def convert_lens_to_indtpr(lens):
         return torch.cumsum(torch.cat((torch.tensor([0]), lens)), dim=0).int()
