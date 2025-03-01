@@ -111,6 +111,8 @@ def ref_masked_attention(
         )
         attn_weights.masked_fill_(local_mask, float("-inf"))
     attn_weights = torch.softmax(attn_weights, dim=-1)
+    if window_size[0] >= 0 or window_size[1] >= 0:
+        attn_weights = attn_weights.masked_fill(torch.all(local_mask, dim=-1, keepdim=True), 0.0)
     out = torch.einsum("hqk,khd->qhd", attn_weights, value.float())
     return out.to(query)
 
@@ -163,9 +165,6 @@ def test_batch_prefill_with_paged_kv_cache(
 ):
     if seed is not None:
         torch.manual_seed(seed)
-
-    if causal and kv_len < qo_len:
-        pytest.skip('kv_len < qo_len is not allowed if causal=True')
 
     def create_tensor(min, max, *args, **kwargs):
         x = torch.randn(*args, **kwargs)
@@ -362,10 +361,6 @@ def test_batch_prefill_with_paged_kv_cache(
         assert not return_lse
 
         rtol, atol = (1e-3, 1e-3) if dtype == torch.float16 else (1e-2, 1e-2)
-
-        # enlarge tolerance to pass very few outputs while checking
-        if causal:
-            atol = atol * 1.4
 
         o_ref_i = ref_masked_attention(qi, ki, vi, causal=causal, logits_soft_cap=logits_soft_cap)
         o_i = o[q_indptr_cpu[i] : q_indptr_cpu[i + 1]]
