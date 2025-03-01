@@ -136,6 +136,9 @@ def ref_masked_attention(
 @pytest.mark.parametrize("return_lse", [False])
 @pytest.mark.parametrize("contiguous_kv", [True])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("q_init_min,q_init_max", [(-3, 3)])
+@pytest.mark.parametrize("k_init_min,k_init_max", [(-3, 3)])
+@pytest.mark.parametrize("v_init_min,v_init_max", [(-3, 3)])
 @pytest.mark.parametrize("seed", [123])
 def test_batch_prefill_with_paged_kv_cache(
     batch_size,
@@ -153,15 +156,24 @@ def test_batch_prefill_with_paged_kv_cache(
     return_lse,
     contiguous_kv,
     dtype,
+    q_init_min,
+    q_init_max,
+    k_init_min,
+    k_init_max,
+    v_init_min,
+    v_init_max,
     seed
 ):
     if seed is not None:
         torch.manual_seed(seed)
 
+    def create_tensor(min, max, *args, **kwargs):
+        return (min + (max - max) * torch.rand(*args, **kwargs))
+
     def convert_lens_to_indtpr(lens):
         return torch.cumsum(torch.cat((torch.tensor([0]), lens)), dim=0).int()
 
-    q = torch.randn(batch_size * qo_len, num_qo_heads, head_dim).to(dtype).to(0)
+    q = create_tensor(q_init_min, q_init_max, batch_size * qo_len, num_qo_heads, head_dim, dtype=dtype).to(0)
     qo_lens = torch.randint(1, qo_len + 1, (batch_size,))
     q_indptr_cpu = convert_lens_to_indtpr(qo_lens)
     num_pages_per_seq = (kv_len + page_size - 1) // page_size
@@ -176,7 +188,7 @@ def test_batch_prefill_with_paged_kv_cache(
             tmp.append(2)
             tmp.append(v)
         kv_shape = tmp
-        kv_data_fp32 = torch.randn(*kv_shape, dtype=torch.float32).to(0)
+        kv_data_fp32 = create_tensor(k_init_min, k_init_max, *kv_shape, dtype=torch.float32).to(0)
         kv_data = kv_data_fp32.to(dtype)
         kv_data = kv_data[:, 1, :, 1, :, 1, :, 1, :]
         kv_data_fp32 = kv_data_fp32[:, 1, :, 1, :, 1, :, 1, :]
@@ -186,7 +198,7 @@ def test_batch_prefill_with_paged_kv_cache(
             != kv_data.shape[-3] * kv_data.shape[-2] * kv_data.shape[-1]
         )
     else:
-        kv_data_fp32 = torch.randn(*kv_shape, dtype=torch.float32).to(0)
+        kv_data_fp32 = create_tensor(k_init_min, k_init_max, *kv_shape, dtype=torch.float32).to(0)
         kv_data = kv_data_fp32.to(dtype)
     kv_indptr_cpu = torch.arange(0, batch_size + 1).int() * num_pages_per_seq
     kv_indices_cpu = torch.arange(0, total_num_pages).int()
