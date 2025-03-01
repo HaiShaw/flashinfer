@@ -177,8 +177,8 @@ def test_batch_prefill_with_paged_kv_cache(
     q = create_tensor(q_init_min, q_init_max, batch_size * qo_len, num_qo_heads, head_dim, dtype=dtype).to(0)
     qo_lens = torch.randint(1, qo_len + 1, (batch_size,))
     q_indptr_cpu = convert_lens_to_indtpr(qo_lens)
-    num_pages_per_seq = (kv_len + page_size - 1) // page_size
-    total_num_pages = num_pages_per_seq * batch_size
+    max_num_pages_per_seq = (kv_len + page_size - 1) // page_size
+    total_num_pages = max_num_pages_per_seq * batch_size
     if kv_layout == "HND":
         kv_shape = [total_num_pages, 2, num_kv_heads, page_size, head_dim]
     else:
@@ -201,11 +201,11 @@ def test_batch_prefill_with_paged_kv_cache(
     else:
         kv_data_fp32 = create_tensor(kv_init_min, kv_init_max, *kv_shape, dtype=torch.float32).to(0)
         kv_data = kv_data_fp32.to(dtype)
-    kv_indptr_cpu = torch.arange(0, batch_size + 1).int() * num_pages_per_seq
+    kv_lens = torch.randint(1, kv_len + 1, (batch_size,)).int()
+    kv_num_used_pages = (kv_lens + page_size - 1) // page_size
+    kv_indptr_cpu = convert_lens_to_indtpr(kv_num_used_pages)
     kv_indices_cpu = torch.arange(0, total_num_pages).int()
-    kv_last_page_len_cpu = torch.full(
-        (batch_size,), (kv_len - 1) % page_size + 1, dtype=torch.int32
-    )
+    kv_last_page_len_cpu = ((kv_lens  - 1) % page_size + 1).int()
 
     workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.int8).to(0)
     if not use_cuda_graph:
