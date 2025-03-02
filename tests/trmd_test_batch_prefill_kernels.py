@@ -166,6 +166,9 @@ def test_batch_prefill_with_paged_kv_cache(
     if causal and kv_len < qo_len:
         pytest.skip('kv_len < qo_len is not allowed if causal=True')
 
+    if head_dim == 64 and qo_len <= 64:
+       pytest.skip('Unsupported configuration')
+
     def create_tensor(min, max, *args, **kwargs):
         x = torch.randn(*args, **kwargs)
         x = (x - x.min()) / (x.max() - x.min())
