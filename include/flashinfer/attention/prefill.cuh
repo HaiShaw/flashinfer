@@ -1171,16 +1171,16 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
   // only necessary when blockDim.z > 1
   if constexpr (NUM_WARPS_KV > 1) {
     float2* smem_md = (float2*)(smem_workspace +
-                                NUM_MMA_Q * NUM_MMA_D * NUM_WARPS_Q * NUM_WARPS_KV * WARP_SIZE * 8);
-    // o: [num_warps, NUM_MMA_Q, NUM_MMA_D, WARP_SIZE(32), 8]
-    // md: [num_warps, NUM_MMA_Q, 2, WARP_SIZE(32), 2 (m/d)]
+                                NUM_MMA_Q * NUM_MMA_D * NUM_WARPS_Q * NUM_WARPS_KV * WARP_SIZE * 4);
+    // o: [num_warps, NUM_MMA_Q, NUM_MMA_D, WARP_SIZE(64), 4]
+    // md: [num_warps, NUM_MMA_Q, 1, WARP_SIZE(64), 2 (m/d)]
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
       for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
-        vec_t<float, 8>::memcpy(
+        vec_t<float, 4>::memcpy(
             smem_workspace +
-                (((warp_idx * NUM_MMA_Q + mma_q) * NUM_MMA_D + mma_d) * WARP_SIZE + lane_idx) * 8,
+                (((warp_idx * NUM_MMA_Q + mma_q) * NUM_MMA_D + mma_d) * WARP_SIZE + lane_idx) * 4,
             o_frag[mma_q][mma_d]);
       }
     }
@@ -1190,7 +1190,7 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
       for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
         for (uint32_t j = 0; j < 1; ++j) {
-          smem_md[((warp_idx * NUM_MMA_Q + mma_q) * 2 + j) * WARP_SIZE + lane_idx] =
+          smem_md[((warp_idx * NUM_MMA_Q + mma_q) * 1 + j) * WARP_SIZE + lane_idx] =
               make_float2(float(m[mma_q][j]), d[mma_q][j]);
         }
       }
@@ -1199,7 +1199,7 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
       __syncthreads();
 #pragma unroll
       for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
-        float o_scale[2][NUM_WARPS_KV];
+        float o_scale[1][NUM_WARPS_KV];
 #pragma unroll
         for (uint32_t j = 0; j < 1; ++j) {
           float m_new = -math::inf, d_new = 1.f;
@@ -1208,7 +1208,7 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
             float2 md = smem_md[(((i * NUM_WARPS_Q + get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>()) *
                                       NUM_MMA_Q +
                                   mma_q) *
-                                     2 +
+                                     1 +
                                  j) *
                                     WARP_SIZE +
                                 lane_idx];
@@ -1222,7 +1222,7 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
             float2 md = smem_md[(((i * NUM_WARPS_Q + get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>()) *
                                       NUM_MMA_Q +
                                   mma_q) *
-                                     2 +
+                                     1 +
                                  j) *
                                     WARP_SIZE +
                                 lane_idx];
@@ -1235,11 +1235,11 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
 
 #pragma unroll
         for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
-          vec_t<float, 8> o_new;
+          vec_t<float, 4> o_new;
           o_new.fill(0.f);
 #pragma unroll
           for (uint32_t i = 0; i < NUM_WARPS_KV; ++i) {
-            vec_t<float, 8> oi;
+            vec_t<float, 4> oi;
             oi.load(smem_workspace +
                     ((((i * NUM_WARPS_Q + get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>()) * NUM_MMA_Q +
                        mma_q) *
@@ -1247,10 +1247,10 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
                       mma_d) *
                          WARP_SIZE +
                      lane_idx) *
-                        8);
+                        4);
 #pragma unroll
             for (uint32_t reg_id = 0; reg_id < 4; ++reg_id) {
-              o_new[reg_id] += oi[reg_id] * o_scale[(reg_id % 4) / 2][i];
+              o_new[reg_id] += oi[reg_id] * o_scale[0][i];
             }
           }
           o_new.store(o_frag[mma_q][mma_d]);
@@ -1263,11 +1263,11 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
       for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
         for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
-          vec_t<float, 8> o_new;
+          vec_t<float, 4> o_new;
           o_new.fill(0.f);
 #pragma unroll
           for (uint32_t i = 0; i < NUM_WARPS_KV; ++i) {
-            vec_t<float, 8> oi;
+            vec_t<float, 4> oi;
             oi.load(smem_workspace +
                     ((((i * NUM_WARPS_Q + get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>()) * NUM_MMA_Q +
                        mma_q) *
@@ -1275,7 +1275,7 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
                       mma_d) *
                          WARP_SIZE +
                      lane_idx) *
-                        8);
+                        4);
 #pragma unroll
             for (uint32_t reg_id = 0; reg_id < 4; ++reg_id) {
               o_new[reg_id] += oi[reg_id];
@@ -2084,7 +2084,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
 
     // threadblock synchronization
     threadblock_sync_mdo_states<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_Q, NUM_MMA_D, DTypeQKAccum>(
-        variant, o_frag, (float*)smem, m, d, warp_idx, lane_idx);
+        variant, o_frag, (float*)smem, m, d, warp_idx, real_lane_idx);
 
     // normalize d
     normalize_d<NUM_MMA_Q, NUM_MMA_D>(variant, o_frag, m, d);
