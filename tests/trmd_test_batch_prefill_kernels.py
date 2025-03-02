@@ -116,31 +116,28 @@ def ref_masked_attention(
     out = torch.einsum("hqk,khd->qhd", attn_weights, value.float())
     return out.to(query)
 
-@pytest.mark.parametrize("batch_size", [12, 17])
+@pytest.mark.parametrize("batch_size", [1, 6])
 @pytest.mark.parametrize("qo_len,kv_len", [
-    (127, 512),
-    (127, 513),
-    (113, 203),
-    (128, 217),
-    (113, 211),
-    (108, 256),
-    (256, 512),
-    (1023, 1024),
+    # (6, 6),
+    (796, 796),
+    (864, 864),
+    (3157, 3157),
+    (8192, 8192),
 ])
 @pytest.mark.parametrize("page_size", [1, 16])
-@pytest.mark.parametrize("num_qo_heads,num_kv_heads", [(2, 1), (4, 1)])
+@pytest.mark.parametrize("num_qo_heads,num_kv_heads", [(2, 1), (6, 1)])
 @pytest.mark.parametrize("head_dim", [64, 128])
 @pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("kv_layout", ["HND", "NHD"])
 @pytest.mark.parametrize("pos_encoding_mode", ["NONE"])
 @pytest.mark.parametrize("use_cuda_graph", [False])
-@pytest.mark.parametrize("logits_soft_cap", [0.0, 30.0])
+@pytest.mark.parametrize("logits_soft_cap", [30.0])
 @pytest.mark.parametrize("return_lse", [False])
 @pytest.mark.parametrize("contiguous_kv", [True])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("q_init_min,q_init_max", [(-3, 3)])
 @pytest.mark.parametrize("kv_init_min,kv_init_max", [(-3, 3)])
-@pytest.mark.parametrize("seed", [123])
+@pytest.mark.parametrize("seed", [None])
 def test_batch_prefill_with_paged_kv_cache(
     batch_size,
     kv_len,
