@@ -118,7 +118,7 @@ def ref_masked_attention(
 
 @pytest.mark.parametrize("batch_size", [1, 6])
 @pytest.mark.parametrize("qo_len,kv_len", [
-    # (6, 6),
+    (6, 6),
     (796, 796),
     (864, 864),
     (3157, 3157),
