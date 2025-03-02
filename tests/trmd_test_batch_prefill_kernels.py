@@ -137,7 +137,7 @@ def ref_masked_attention(
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("q_init_min,q_init_max", [(-3, 3)])
 @pytest.mark.parametrize("kv_init_min,kv_init_max", [(-3, 3)])
-@pytest.mark.parametrize("seed", [None])
+@pytest.mark.parametrize("seed", [123])
 def test_batch_prefill_with_paged_kv_cache(
     batch_size,
     kv_len,
