@@ -140,6 +140,7 @@ def ref_masked_attention(
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("q_init_min,q_init_max", [(-3, 3)])
 @pytest.mark.parametrize("kv_init_min,kv_init_max", [(-3, 3)])
+@pytest.mark.parametrize("variable_qo_kv_len", [False])
 @pytest.mark.parametrize("seed", [123])
 def test_batch_prefill_with_paged_kv_cache(
     batch_size,
@@ -161,6 +162,7 @@ def test_batch_prefill_with_paged_kv_cache(
     q_init_max,
     kv_init_min,
     kv_init_max,
+    variable_qo_kv_len,
     seed
 ):
     if seed is not None:
@@ -178,7 +180,10 @@ def test_batch_prefill_with_paged_kv_cache(
         return torch.cumsum(torch.cat((torch.tensor([0]), lens)), dim=0).int()
 
     q = create_tensor(q_init_min, q_init_max, batch_size * qo_len, num_qo_heads, head_dim, dtype=dtype).to(0)
-    qo_lens = torch.randint(1, qo_len + 1, (batch_size,))
+    if variable_qo_kv_len:
+        qo_lens = torch.randint(1, qo_len + 1, (batch_size,)).int()
+    else:
+        qo_lens = torch.full((batch_size,), qo_len).int()
     q_indptr_cpu = convert_lens_to_indtpr(qo_lens)
     max_num_pages_per_seq = (kv_len + page_size - 1) // page_size
     total_num_pages = max_num_pages_per_seq * batch_size
@@ -204,7 +209,10 @@ def test_batch_prefill_with_paged_kv_cache(
     else:
         kv_data_fp32 = create_tensor(kv_init_min, kv_init_max, *kv_shape, dtype=torch.float32).to(0)
         kv_data = kv_data_fp32.to(dtype)
-    kv_lens = torch.randint(1, kv_len + 1, (batch_size,)).int()
+    if variable_qo_kv_len:
+        kv_lens = torch.randint(1, kv_len + 1, (batch_size,)).int()
+    else:
+        kv_lens = torch.full((batch_size,), kv_len).int()
     kv_num_used_pages = (kv_lens + page_size - 1) // page_size
     kv_indptr_cpu = convert_lens_to_indtpr(kv_num_used_pages)
     kv_indices_cpu = torch.arange(0, total_num_pages).int()
