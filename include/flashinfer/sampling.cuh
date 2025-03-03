@@ -16,10 +16,18 @@
 #ifndef FLASHINFER_SAMPLING_CUH_
 #define FLASHINFER_SAMPLING_CUH_
 
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#include <hipcub/block/block_adjacent_difference.hpp>
+#include <hipcub/block/block_reduce.hpp>
+#include <hipcub/block/block_scan.hpp>
+#include <limits>
+#else
 #include <cub/block/block_adjacent_difference.cuh>
 #include <cub/block/block_reduce.cuh>
 #include <cub/block/block_scan.cuh>
 #include <cuda/std/limits>
+#endif
+
 #include <numeric>
 
 #include "math.cuh"
@@ -29,8 +37,15 @@
 namespace flashinfer {
 
 namespace sampling {
-
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+using namespace hipcub;
+template <typename T>
+using numeric_limits = std::numeric_limits<T>;
+#else
 using namespace cub;
+template <typename T>
+using numeric_limits = cuda::std::numeric_limits<T>;
+#endif
 
 #define DISPATCH_DETERMINISTIC(deterministic, DETERMINISTIC, ...) \
   if (deterministic) {                                            \
@@ -120,20 +135,20 @@ __device__ __forceinline__ void DeterministicInclusiveSum(
 
 #pragma unroll
   for (uint32_t offset = 1; offset < 32; offset *= 2) {
-    T tmp = __shfl_up_sync(0xffffffff, thread_exclusive_prefix_sum, offset);
+    T tmp = __shfl_up(thread_exclusive_prefix_sum, offset);
     if ((threadIdx.x + 1) % (offset * 2) == 0) {
       thread_exclusive_prefix_sum += tmp;
     }
   }
 
-  T warp_sum = __shfl_sync(0xffffffff, thread_exclusive_prefix_sum, threadIdx.x | 0xffffffff);
+  T warp_sum = __shfl(thread_exclusive_prefix_sum, threadIdx.x | 0xffffffff);
   if (threadIdx.x % 32 == 31) {
     thread_exclusive_prefix_sum = 0;
   }
 
 #pragma unroll
   for (uint32_t offset = 16; offset >= 1; offset /= 2) {
-    T tmp = __shfl_xor_sync(0xffffffff, thread_exclusive_prefix_sum, offset);
+    T tmp = __shfl_xor(thread_exclusive_prefix_sum, offset);
     if ((threadIdx.x + 1) % (offset * 2) == 0) {
       thread_exclusive_prefix_sum = tmp + thread_exclusive_prefix_sum;
     }
@@ -151,7 +166,7 @@ __device__ __forceinline__ void DeterministicInclusiveSum(
 
 #pragma unroll
     for (uint32_t offset = 1; offset < 32; offset *= 2) {
-      T tmp = __shfl_up_sync(0xffffffff, warp_exclusive_prefix_sum, offset);
+      T tmp = __shfl_up(warp_exclusive_prefix_sum, offset);
       if ((threadIdx.x + 1) % (offset * 2) == 0) {
         warp_exclusive_prefix_sum += tmp;
       }
@@ -163,7 +178,7 @@ __device__ __forceinline__ void DeterministicInclusiveSum(
 
 #pragma unroll
     for (uint32_t offset = 16; offset >= 1; offset /= 2) {
-      T tmp = __shfl_xor_sync(0xffffffff, warp_exclusive_prefix_sum, offset);
+      T tmp = __shfl_xor(warp_exclusive_prefix_sum, offset);
       if ((threadIdx.x + 1) % (offset * 2) == 0) {
         warp_exclusive_prefix_sum = tmp + warp_exclusive_prefix_sum;
       }
@@ -199,7 +214,7 @@ __device__ __forceinline__ void DeviceSamplingFromProb(
   }
   T aggregate_local =
       BlockReduce<T, BLOCK_THREADS, REDUCE_ALGORITHM>(temp_storage->block_prim.reduce)
-          .Sum<VEC_SIZE>(prob_greater_than_threshold);
+          .Sum(prob_greater_than_threshold);
   if (tx == 0) {
     temp_storage->block_aggregate.value = aggregate_local;
   }
@@ -212,7 +227,7 @@ __device__ __forceinline__ void DeviceSamplingFromProb(
           prob_greater_than_threshold, inclusive_cdf, temp_storage);
     } else {
       BlockScan<T, BLOCK_THREADS, SCAN_ALGORITHM>(temp_storage->block_prim.scan)
-          .InclusiveSum<VEC_SIZE>(prob_greater_than_threshold, inclusive_cdf);
+          .InclusiveSum(prob_greater_than_threshold, inclusive_cdf);
 
       __syncthreads();
     }
@@ -225,10 +240,10 @@ __device__ __forceinline__ void DeviceSamplingFromProb(
     bool greater_than_u_diff[VEC_SIZE];
 #ifdef FLASHINFER_CUB_SUBTRACTLEFT_DEFINED
     BlockAdjacentDifference<bool, BLOCK_THREADS>(temp_storage->block_prim.adj_diff)
-        .SubtractLeft<VEC_SIZE>(greater_than_u, greater_than_u_diff, BoolDiffOp());
+        .SubtractLeft(greater_than_u, greater_than_u_diff, BoolDiffOp());
 #else
     BlockAdjacentDifference<bool, BLOCK_THREADS>(temp_storage->block_prim.adj_diff)
-        .FlagHeads<VEC_SIZE>(greater_than_u_diff, greater_than_u, BoolDiffOp(), 0);
+        .FlagHeads(greater_than_u_diff, greater_than_u, BoolDiffOp(), 0);
 #endif
     __syncthreads();
 
@@ -342,7 +357,7 @@ __global__ void TopKSamplingFromProbKernel(DType* probs, DType* uniform_samples,
 
       aggregate_gt_pivot += BlockReduce<Pair<DType>, BLOCK_THREADS, REDUCE_ALGORITHM>(
                                 temp_storage.block_prim.reduce_pair)
-                                .Sum<VEC_SIZE>(probs_gt_pivot);
+                                .Sum(probs_gt_pivot);
       if (tx == 0) {
         temp_storage.block_aggregate.pair = aggregate_gt_pivot;
       }
@@ -428,7 +443,7 @@ __global__ void TopPSamplingFromProbKernel(DType* probs, DType* uniform_samples,
       }
 
       aggregate_gt_pivot += BlockReduce<DType, BLOCK_THREADS>(temp_storage.block_prim.reduce)
-                                .Sum<VEC_SIZE>(probs_gt_pivot);
+                                .Sum(probs_gt_pivot);
       if (tx == 0) {
         temp_storage.block_aggregate.value = aggregate_gt_pivot;
       }
@@ -488,7 +503,7 @@ __global__ void MinPSamplingFromProbKernel(DType* probs, DType* uniform_samples,
       probs_[j] = probs_vec[j];
     }
     max_p = max(max_p, BlockReduce<DType, BLOCK_THREADS>(temp_storage.block_prim.reduce)
-                           .Reduce<VEC_SIZE>(probs_, cub::Max()));
+                           .Reduce(probs_, cub::Max()));
     __syncthreads();
   }
   if (tx == 0) {
@@ -537,7 +552,7 @@ __global__ void MinPSamplingFromProbKernel(DType* probs, DType* uniform_samples,
       }
 
       aggregate_gt_pivot += BlockReduce<DType, BLOCK_THREADS>(temp_storage.block_prim.reduce)
-                                .Sum<VEC_SIZE>(probs_gt_pivot);
+                                .Sum(probs_gt_pivot);
       if (tx == 0) {
         temp_storage.block_aggregate.value = aggregate_gt_pivot;
       }
@@ -622,7 +637,7 @@ __global__ void TopKTopPSamplingFromProbKernel(DType* probs, DType* uniform_samp
 
       aggregate_gt_pivot += BlockReduce<Pair<DType>, BLOCK_THREADS, REDUCE_ALGORITHM>(
                                 temp_storage.block_prim.reduce_pair)
-                                .Sum<VEC_SIZE>(probs_gt_pivot);
+                                .Sum(probs_gt_pivot);
       if (tx == 0) {
         temp_storage.block_aggregate.pair = aggregate_gt_pivot;
       }
@@ -848,7 +863,7 @@ __global__ void TopPRenormProbKernel(DType* probs, DType* renormed_prob, DType* 
     threadlocal_max_val =
         max(threadlocal_max_val,
             BlockReduce<DType, BLOCK_THREADS, REDUCE_ALGORITHM>(temp_storage.block_prim.reduce)
-                .Reduce<VEC_SIZE>(probs_greater_than_pivot, cub::Max()));
+                .Reduce(probs_greater_than_pivot, cub::Max()));
     __syncthreads();
   }
   if (tx == 0) {
@@ -889,7 +904,7 @@ __global__ void TopPRenormProbKernel(DType* probs, DType* renormed_prob, DType* 
       }
       threadlocal_sum +=
           BlockReduce<DType, BLOCK_THREADS, REDUCE_ALGORITHM>(temp_storage.block_prim.reduce)
-              .Sum<VEC_SIZE>(probs_greater_than_pivot);
+              .Sum(probs_greater_than_pivot);
       __syncthreads();
     }
     min_gt_low = BlockReduce<DType, BLOCK_THREADS, REDUCE_ALGORITHM>(temp_storage.block_prim.reduce)
@@ -940,7 +955,7 @@ __global__ void TopKMaskLogitsKernel(DType* logits, DType* masked_logits, IdType
   const uint32_t bx = blockIdx.x, tx = threadIdx.x;
   const uint32_t row_idx = bx;
   uint32_t k = top_k_arr == nullptr ? top_k_val : top_k_arr[bx];
-  float pivot = -cuda::std::numeric_limits<float>::infinity();
+  float pivot = -numeric_limits<float>::infinity();
   vec_t<DType, VEC_SIZE> logits_vec;
   if (k < d) {
     extern __shared__ __align__(alignof(RenormTempStorage<DType, BLOCK_THREADS, REDUCE_ALGO>))
@@ -949,8 +964,8 @@ __global__ void TopKMaskLogitsKernel(DType* logits, DType* masked_logits, IdType
         reinterpret_cast<RenormTempStorage<DType, BLOCK_THREADS, REDUCE_ALGO>&>(smem_renorm);
     DType logits_greater_than_pivot[VEC_SIZE];  // pivot initialized to 0
 
-    DType threadlocal_max_val = DType(-cuda::std::numeric_limits<float>::infinity()),
-          threadlocal_min_val = DType(cuda::std::numeric_limits<float>::infinity());
+    DType threadlocal_max_val = DType(-numeric_limits<float>::infinity()),
+          threadlocal_min_val = DType(numeric_limits<float>::infinity());
     for (uint32_t i = 0; i < ceil_div(d, BLOCK_THREADS * VEC_SIZE); ++i) {
       logits_vec.fill(DType(0));
       if ((i * BLOCK_THREADS + tx) * VEC_SIZE < d) {
@@ -963,12 +978,12 @@ __global__ void TopKMaskLogitsKernel(DType* logits, DType* masked_logits, IdType
       threadlocal_max_val =
           max(threadlocal_max_val,
               BlockReduce<DType, BLOCK_THREADS, REDUCE_ALGORITHM>(temp_storage.block_prim.reduce)
-                  .Reduce<VEC_SIZE>(logits_greater_than_pivot, cub::Max()));
+                  .Reduce(logits_greater_than_pivot, cub::Max()));
       __syncthreads();
       threadlocal_min_val =
           min(threadlocal_min_val,
               BlockReduce<DType, BLOCK_THREADS, REDUCE_ALGORITHM>(temp_storage.block_prim.reduce)
-                  .Reduce<VEC_SIZE>(logits_greater_than_pivot, cub::Min()));
+                  .Reduce(logits_greater_than_pivot, cub::Min()));
       __syncthreads();
     }
     if (tx == 0) {
@@ -1012,7 +1027,7 @@ __global__ void TopKMaskLogitsKernel(DType* logits, DType* masked_logits, IdType
         }
         threadlocal_count_sum +=
             BlockReduce<int, BLOCK_THREADS, REDUCE_ALGORITHM>(temp_storage.block_prim.reduce_int)
-                .Sum<VEC_SIZE>(probs_greater_than_pivot_count);
+                .Sum(probs_greater_than_pivot_count);
         __syncthreads();
       }
       min_gt_low =
@@ -1050,7 +1065,7 @@ __global__ void TopKMaskLogitsKernel(DType* logits, DType* masked_logits, IdType
     for (uint32_t j = 0; j < VEC_SIZE; ++j) {
       logits_vec[j] = (logits_vec[j] > pivot)
                           ? logits_vec[j]
-                          : DType(-cuda::std::numeric_limits<float>::infinity());
+                          : DType(-numeric_limits<float>::infinity());
     }
     if ((i * BLOCK_THREADS + tx) * VEC_SIZE < d) {
       logits_vec.store(masked_logits + row_idx * d + i * BLOCK_THREADS * VEC_SIZE + tx * VEC_SIZE);
@@ -1065,7 +1080,7 @@ __global__ void TopKRenormProbKernel(DType* probs, DType* renormed_prob, IdType*
   const uint32_t bx = blockIdx.x, tx = threadIdx.x;
   const uint32_t row_idx = bx;
   uint32_t k = top_k_arr == nullptr ? top_k_val : top_k_arr[bx];
-  float pivot = -cuda::std::numeric_limits<float>::infinity(), normalizer = 1;
+  float pivot = -numeric_limits<float>::infinity(), normalizer = 1;
   vec_t<DType, VEC_SIZE> probs_vec;
   if (k < d) {
     extern __shared__ __align__(alignof(RenormTempStorage<DType, BLOCK_THREADS, REDUCE_ALGO>))
@@ -1088,7 +1103,7 @@ __global__ void TopKRenormProbKernel(DType* probs, DType* renormed_prob, IdType*
       threadlocal_max_val =
           max(threadlocal_max_val,
               BlockReduce<DType, BLOCK_THREADS, REDUCE_ALGORITHM>(temp_storage.block_prim.reduce)
-                  .Reduce<VEC_SIZE>(probs_greater_than_pivot, cub::Max()));
+                  .Reduce(probs_greater_than_pivot, cub::Max()));
       __syncthreads();
     }
     if (tx == 0) {
@@ -1132,7 +1147,7 @@ __global__ void TopKRenormProbKernel(DType* probs, DType* renormed_prob, IdType*
         }
         threadlocal_sum += BlockReduce<Pair<DType>, BLOCK_THREADS, REDUCE_ALGORITHM>(
                                temp_storage.block_prim.reduce_pair)
-                               .Sum<VEC_SIZE>(probs_greater_than_pivot_pair);
+                               .Sum(probs_greater_than_pivot_pair);
         __syncthreads();
       }
       min_gt_low =
@@ -1315,7 +1330,7 @@ __global__ void ChainSpeculativeSampling(DType* draft_probs, IdType* draft_token
     }
     sum_relu_q_minus_p +=
         BlockReduce<DType, BLOCK_THREADS, REDUCE_ALGORITHM>(temp_storage.block_prim.reduce)
-            .Sum<VEC_SIZE>(relu_q_minus_p);
+            .Sum(relu_q_minus_p);
     __syncthreads();
   }
   if (tx == 0) {
