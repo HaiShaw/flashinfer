@@ -834,7 +834,26 @@ def test_batch_prefill_with_ragged_kv_cache_custom_mask(
 
 if __name__ == "__main__":
     test_batch_prefill_with_paged_kv_cache(
-        12, 54, 37, 16, 8, 8, 128, True, "HND", "NONE", True, 0.0, False, True
+        batch_size=12,
+        kv_len=54,
+        qo_len=37,
+        page_size=16,
+        num_qo_heads=8,
+        num_kv_heads=8,
+        head_dim=128,
+        causal=True,
+        kv_layout="HND",
+        pos_encoding_mode="NONE",
+        use_cuda_graph=False,
+        logits_soft_cap=0.0,
+        return_lse=False,
+        contiguous_kv=True,
+        dtype=torch.float16,
+        q_init_min=-3,
+        q_init_max=3,
+        kv_init_min=-3,
+        kv_init_max=3,
+        seed=19378,
     )
 '''    test_batch_prefill_with_tuple_paged_kv_cache(
         12, 54, 37, 16, 8, 8, 128, True, "HND", "NONE", True, 0.0, False, True
