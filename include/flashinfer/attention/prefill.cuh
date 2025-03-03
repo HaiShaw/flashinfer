@@ -1990,7 +1990,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
         (MASK_MODE == MaskMode::kCausal
              ? min(chunk_size,
                    sub_if_greater_or_zero(
-                       kv_len - qo_len + ((qo_tile_idx + 1) * num_rows_per_cta) / group_size,
+                       kv_len - qo_len + ((qo_tile_idx + 1) * num_rows_per_cta) / group_size + 1,
                        chunk_start))
              : chunk_size),
         16 * NUM_WARPS_KV * NUM_MMA_KV);
