@@ -2329,7 +2329,7 @@ gpuError_t BatchPrefillWithPagedKVCacheDispatched(typename AttentionVariant::Par
                                          params.total_num_rows, num_qo_heads, HEAD_DIM, stream));
         }
       }
-      gpuDeviceSynchronize();
+      FLASHINFER_CUDA_CALL(gpuDeviceSynchronize());
     }
   });
   return gpuSuccess;
