@@ -41,6 +41,7 @@ def ref_masked_attention(
     value: torch.Tensor,
     causal: bool = False,
     window_left: int = -1,
+    sm_scale: float = 0.0,
     logits_soft_cap: float = 0.0
 ) -> torch.Tensor:
     if causal:
@@ -51,9 +52,8 @@ def ref_masked_attention(
     head_dim = query.shape[2]
     seqlen_q = query.shape[0]
     seqlen_k = key.shape[0]
-    scale = 1.0 / math.sqrt(head_dim)
 
-    attn_weights = scale * torch.einsum("qhd,khd->hqk", query.float(), key.float())
+    attn_weights = sm_scale * torch.einsum("qhd,khd->hqk", query.float(), key.float())
     if 0 < logits_soft_cap:
         attn_weights = logits_soft_cap * torch.tanh(attn_weights / logits_soft_cap)
     if window_size[0] >= 0 or window_size[1] >= 0:
@@ -70,67 +70,95 @@ def ref_masked_attention(
     out = torch.einsum("hqk,khd->qhd", attn_weights, value.float())
     return out.to(query)
 
-def validate_attention()
+def find_mismatches(A, B, atol=1e-5, rtol=1e-5):
+    # Compute the absolute difference
+    diff = torch.abs(A - B)
+
+    # Compute the relative difference (avoid division by zero)
+    rel_diff = diff / torch.abs(B).clamp(min=1e-8)
+
+    # Identify mismatches (where both atol and rtol conditions fail)
+    mismatches = (diff > atol) & (rel_diff > rtol)
+
+    # Get mismatch positions
+    mismatch_positions = torch.nonzero(mismatches, as_tuple=False)
+
+    return mismatch_positions
+
+def validate_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    out: torch.Tensor,
+    qo_indptr: torch.Tensor,
+    kv_indptr: torch.Tensor,
+    kv_indices: torch.Tensor,
+    kv_last_page_len: torch.Tensor,
+    causal: bool = False,
+    logits_soft_cap: float = 0.0,
+    sm_scale: float = 1.0,
+    window_left: int = -1,
+    kv_layout: str = "NHD"
+):
+    batch_size = qo_indptr.size(0) - 1
+    head_dim = query.size(-1)
+    dtype = query.dtype
+    num_kv_heads = key.size(1) if kv_layout == "HND" else key.size(2)
+
     for i in range(batch_size):
             perm_dims = [0, 2, 1, 3] if kv_layout == "HND" else [0, 1, 2, 3]
             perm_dims_last = [1, 0, 2] if kv_layout == "HND" else [0, 1, 2]
-            qi = q[q_indptr_cpu[i] : q_indptr_cpu[i + 1]]
-            used_kv_indices = kv_indices_cpu[kv_indptr_cpu[i] : kv_indptr_cpu[i + 1]]
+            qi = query[qo_indptr[i] : qo_indptr[i + 1]]
+            used_kv_indices = kv_indices[kv_indptr[i] : kv_indptr[i + 1]]
             ki = torch.cat(
-                [
-                    kv_data_fp32[used_kv_indices[:-1], 0]
-                    .permute(*perm_dims)
-                    .reshape(-1, num_kv_heads, head_dim),
-                    (
-                        kv_data_fp32[
-                            used_kv_indices[-1], 0, :, : kv_last_page_len_cpu[i]
-                        ]
-                        if kv_layout == "HND"
-                        else kv_data_fp32[
-                            used_kv_indices[-1], 0, : kv_last_page_len_cpu[i], :
-                        ]
-                    )
-                    .permute(*perm_dims_last)
-                    .reshape(-1, num_kv_heads, head_dim),
-                ],
-                dim=0,
-            ).to(dtype)
+            [
+                key[used_kv_indices[:-1]]
+                .permute(*perm_dims)
+                .reshape(-1, num_kv_heads, head_dim),
+                (
+                    key[
+                        used_kv_indices[-1], :, : kv_last_page_len[i]
+                    ]
+                    if kv_layout == "HND"
+                    else key[
+                        used_kv_indices[-1], : kv_last_page_len[i], :
+                    ]
+                )
+                .permute(*perm_dims_last)
+                .reshape(-1, num_kv_heads, head_dim),
+            ],
+            dim=0,
+            )
             vi = torch.cat(
                 [
-                    kv_data_fp32[used_kv_indices[:-1], 1]
+                    value[used_kv_indices[:-1]]
                     .permute(*perm_dims)
                     .reshape(-1, num_kv_heads, head_dim),
                     (
-                        kv_data_fp32[
-                            used_kv_indices[-1], 1, :, : kv_last_page_len_cpu[i]
+                        value[
+                            used_kv_indices[-1], :, : kv_last_page_len[i]
                         ]
                         if kv_layout == "HND"
-                        else kv_data_fp32[
-                            used_kv_indices[-1], 1, : kv_last_page_len_cpu[i], :
+                        else value[
+                            used_kv_indices[-1], : kv_last_page_len[i], :
                         ]
                     )
                     .permute(*perm_dims_last)
                     .reshape(-1, num_kv_heads, head_dim),
                 ],
                 dim=0,
-            ).to(dtype)
-            # FIXME: add back single_prefill_with_kv_cache() call after finish implementation
-            """
-            o_ref_i = flashinfer.prefill.single_prefill_with_kv_cache(
-                qi,
-                ki,
-                vi,
-                causal=causal,
-                pos_encoding_mode=pos_encoding_mode,
-                logits_soft_cap=logits_soft_cap,
             )
-            """
-            # NOTICE: for now, we use ref_masked_attention() as reference function
-            assert pos_encoding_mode == 'NONE'
-            assert not return_lse
+
+            rtol, atol = (1e-3, 1e-3) if dtype == torch.float16 else (1e-3, 1e-3)
     
-            rtol, atol = (1e-3, 1e-3) if dtype == torch.float16 else (1e-2, 1e-2)
-    
-            o_ref_i = ref_masked_attention(qi, ki, vi, causal=causal, logits_soft_cap=logits_soft_cap)
-            o_i = o[q_indptr_cpu[i] : q_indptr_cpu[i + 1]]
-            torch.testing.assert_close(o_i, o_ref_i, rtol=rtol, atol=atol)
+            o_ref_i = ref_masked_attention(qi, ki, vi, 
+                                        causal=causal, 
+                                        logits_soft_cap=logits_soft_cap,
+                                        sm_scale=sm_scale)
+            o_i = out[qo_indptr[i] : qo_indptr[i + 1]]
+
+            mismatch = find_mismatches(o_i, o_ref_i, atol, rtol)
+            if 0 < mismatch.size(0):
+                return False
+
+    return True
