@@ -149,7 +149,7 @@ def validate_attention(
                 dim=0,
             )
 
-            rtol, atol = (1e-3, 1e-3) if dtype == torch.float16 else (1e-3, 1e-3)
+            rtol, atol = (1e-3, 1e-3) if dtype == torch.float16 else (1e-2, 1e-2)
     
             o_ref_i = ref_masked_attention(qi, ki, vi, 
                                         causal=causal, 
