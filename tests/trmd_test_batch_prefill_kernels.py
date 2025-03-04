@@ -214,7 +214,7 @@ def test_batch_prefill_with_paged_kv_cache(
         kv_lens = torch.full((batch_size,), kv_len).int()
     kv_num_used_pages = (kv_lens + page_size - 1) // page_size
     kv_indptr_cpu = convert_lens_to_indtpr(kv_num_used_pages)
-    kv_indices_cpu = torch.arange(0, total_num_pages).int()
+    kv_indices_cpu = torch.randperm(total_num_pages).int()
     kv_last_page_len_cpu = ((kv_lens  - 1) % page_size + 1).int()
 
     workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.int8).to(0)
@@ -317,18 +317,19 @@ def test_batch_prefill_with_paged_kv_cache(
         perm_dims = [0, 2, 1, 3] if kv_layout == "HND" else [0, 1, 2, 3]
         perm_dims_last = [1, 0, 2] if kv_layout == "HND" else [0, 1, 2]
         qi = q[q_indptr_cpu[i] : q_indptr_cpu[i + 1]]
+        used_kv_indices = kv_indices_cpu[kv_indptr_cpu[i] : kv_indptr_cpu[i + 1]]
         ki = torch.cat(
             [
-                kv_data_fp32[kv_indptr_cpu[i] : kv_indptr_cpu[i + 1] - 1, 0]
+                kv_data_fp32[used_kv_indices[:-1], 0]
                 .permute(*perm_dims)
                 .reshape(-1, num_kv_heads, head_dim),
                 (
                     kv_data_fp32[
-                        kv_indptr_cpu[i + 1] - 1, 0, :, : kv_last_page_len_cpu[i]
+                        used_kv_indices[-1], 0, :, : kv_last_page_len_cpu[i]
                     ]
                     if kv_layout == "HND"
                     else kv_data_fp32[
-                        kv_indptr_cpu[i + 1] - 1, 0, : kv_last_page_len_cpu[i], :
+                        used_kv_indices[-1], 0, : kv_last_page_len_cpu[i], :
                     ]
                 )
                 .permute(*perm_dims_last)
@@ -338,16 +339,16 @@ def test_batch_prefill_with_paged_kv_cache(
         ).to(dtype)
         vi = torch.cat(
             [
-                kv_data_fp32[kv_indptr_cpu[i] : kv_indptr_cpu[i + 1] - 1, 1]
+                kv_data_fp32[used_kv_indices[:-1], 1]
                 .permute(*perm_dims)
                 .reshape(-1, num_kv_heads, head_dim),
                 (
                     kv_data_fp32[
-                        kv_indptr_cpu[i + 1] - 1, 1, :, : kv_last_page_len_cpu[i]
+                        used_kv_indices[-1], 1, :, : kv_last_page_len_cpu[i]
                     ]
                     if kv_layout == "HND"
                     else kv_data_fp32[
-                        kv_indptr_cpu[i + 1] - 1, 1, : kv_last_page_len_cpu[i], :
+                        used_kv_indices[-1], 1, : kv_last_page_len_cpu[i], :
                     ]
                 )
                 .permute(*perm_dims_last)
