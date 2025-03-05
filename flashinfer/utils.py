@@ -360,8 +360,9 @@ def determine_attention_backend(
         The name of the attention backend to be used.
     """
     major, _ = get_compute_capability(device)
+    return "fa2"
 
-    if (
+    """if (
         major == 9
         and torch.version.cuda >= "12.3"
         and is_fa3_backend_supported(
@@ -374,4 +375,4 @@ def determine_attention_backend(
     ):
         return "fa3"
     else:
-        return "fa2"
+        return "fa2" """

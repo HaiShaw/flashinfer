@@ -48,7 +48,11 @@ __global__ void PackBitsKernel(bool* input, uint8_t* output, int64_t num_element
   int64_t start_offset = blockIdx.x * blockDim.x * 8, tx = threadIdx.x;
   uint8_t ret = 0;
   bool input_vec[8];
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+  typedef hipcub::BlockLoad<bool, 256, 8, hipcub::BLOCK_LOAD_VECTORIZE> BlockLoad;
+#else
   typedef cub::BlockLoad<bool, 256, 8, cub::BLOCK_LOAD_VECTORIZE> BlockLoad;
+#endif
   __shared__ typename BlockLoad::TempStorage temp_storage;
   BlockLoad(temp_storage)
       .Load(input + start_offset, input_vec, num_elements - start_offset, /*default=*/0);
@@ -68,7 +72,11 @@ __global__ void SegmentPackBitsKernel(bool* input, uint8_t* output, IdType* inpu
                                       IdType* output_indptr) {
   int64_t bx = blockIdx.x, tx = threadIdx.x;
   bool input_vec[8];
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+  typedef hipcub::BlockLoad<bool, 256, 8, hipcub::BLOCK_LOAD_VECTORIZE> BlockLoad;
+#else
   typedef cub::BlockLoad<bool, 256, 8, cub::BLOCK_LOAD_VECTORIZE> BlockLoad;
+#endif
   __shared__ typename BlockLoad::TempStorage temp_storage;
   int64_t num_elements = input_indptr[bx + 1] - input_indptr[bx];
   for (uint32_t start_offset = 0; start_offset < num_elements; start_offset += 8 * blockDim.x) {

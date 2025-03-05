@@ -668,8 +668,13 @@ gpuError_t MergeStates(DTypeIn* v, float* s, DTypeO* v_merged, float* s_merged,
       void* args[] = {&v, &s, &v_merged, &s_merged, &num_index_sets, &num_heads};
       uint32_t smem_size =
           num_smem_stages * bdy * head_dim * sizeof(DTypeIn) + num_threads * sizeof(float);
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+      FLASHINFER_CUDA_CALL(
+          gpuFuncSetAttribute(reinterpret_cast<const void*>(kernel), gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+#else
       FLASHINFER_CUDA_CALL(
           gpuFuncSetAttribute(kernel, gpuFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+#endif
       FLASHINFER_CUDA_CALL(gpuLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
     } else {
       uint32_t bdy = num_heads;

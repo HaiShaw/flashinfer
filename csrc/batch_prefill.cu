@@ -16,6 +16,7 @@
 #include <flashinfer/attention/mask.cuh>
 #include <flashinfer/attention/scheduler.cuh>
 #include <flashinfer/pos_enc.cuh>
+#include <flashinfer/gpu_defines_cuda_hip.h>
 #include <optional>
 
 #include "batch_prefill_config.inc"
@@ -28,13 +29,13 @@ template <uint32_t CTA_TILE_Q, uint32_t HEAD_DIM_QK, uint32_t HEAD_DIM_VO,
           PosEncodingMode POS_ENCODING_MODE, bool USE_FP16_QK_REDUCTION, MaskMode MASK_MODE,
           typename AttentionVariant, typename Params>
 cudaError_t BatchPrefillWithPagedKVCacheDispatched(Params params, typename Params::DTypeO* tmp_v,
-                                                   float* tmp_s, cudaStream_t stream);
+                                                   float* tmp_s, gpuStream_t stream);
 
 template <uint32_t CTA_TILE_Q, uint32_t HEAD_DIM_QK, uint32_t HEAD_DIM_VO,
           PosEncodingMode POS_ENCODING_MODE, bool USE_FP16_QK_REDUCTION, MaskMode MASK_MODE,
           typename AttentionVariant, typename Params>
 cudaError_t BatchPrefillWithRaggedKVCacheDispatched(Params params, typename Params::DTypeO* tmp_v,
-                                                    float* tmp_s, cudaStream_t stream);
+                                                    float* tmp_s, gpuStream_t stream);
 
 }  // namespace flashinfer
 
@@ -54,7 +55,7 @@ at::Tensor BatchPrefillWithKVCachePlan(
 
   PrefillPlanInfo plan_info;
 
-  cudaStream_t stream = reinterpret_cast<cudaStream_t>(cuda_stream);
+  gpuStream_t stream = reinterpret_cast<gpuStream_t>(cuda_stream);
   cudaError_t status = PrefillPlan<IdType>(
       float_workspace_buffer.data_ptr(), float_workspace_size_in_bytes,
       int_workspace_buffer.data_ptr(), page_locked_int_workspace_buffer.data_ptr(),
@@ -109,7 +110,7 @@ void BatchPrefillWithRaggedKVCacheRun(
   auto q_scalar_type = q.scalar_type();
   auto kv_scalar_type = k.scalar_type();
 
-  cudaStream_t stream = reinterpret_cast<cudaStream_t>(cuda_stream);
+  gpuStream_t stream = reinterpret_cast<gpuStream_t>(cuda_stream);
 
   DISPATCH_context(
       DTypeQ, DTypeKV, DTypeO, IdType, MASK_MODE, HEAD_DIM_QK, HEAD_DIM_VO, POS_ENCODING_MODE,
@@ -240,7 +241,7 @@ void BatchPrefillWithPagedKVCacheRun(
   TORCH_CHECK(k_strides == v_strides, "k/v strides must be identical");
   kv_cache_strides = k_strides.data();
 
-  cudaStream_t stream = reinterpret_cast<cudaStream_t>(cuda_stream);
+  gpuStream_t stream = reinterpret_cast<gpuStream_t>(cuda_stream);
 
   DISPATCH_context(
       DTypeQ, DTypeKV, DTypeO, IdType, MASK_MODE, HEAD_DIM_QK, HEAD_DIM_VO, POS_ENCODING_MODE,

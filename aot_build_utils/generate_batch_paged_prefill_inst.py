@@ -42,10 +42,10 @@ def get_cu_file_str(
     def get_insts(attention_variant, dtype_out):
         return "\n".join(
             [
-                """template cudaError_t BatchPrefillWithPagedKVCacheDispatched<{cta_tile_q}, {head_dim_qk}, {head_dim_vo}, {pos_encoding_mode}, {use_fp16_qk_reduction}, {mask_mode}, {attention_variant}, Params>(
+                """template gpuError_t BatchPrefillWithPagedKVCacheDispatched<{cta_tile_q}, {head_dim_qk}, {head_dim_vo}, {pos_encoding_mode}, {use_fp16_qk_reduction}, {mask_mode}, {attention_variant}, Params>(
     Params params,
     {dtype_out}* tmp_v,
-    float* tmp_s, cudaStream_t stream);
+    float* tmp_s, gpuStream_t stream);
     """.format(
                     cta_tile_q=cta_tile_q,
                     head_dim_qk=head_dim_qk,
@@ -67,6 +67,7 @@ def get_cu_file_str(
     idtype = idtype_literal[idtype]
 
     content = f"""#include <flashinfer/attention_impl.cuh>
+#include <flashinfer/gpu_defines_cuda_hip.h>
 
 namespace flashinfer {{
 

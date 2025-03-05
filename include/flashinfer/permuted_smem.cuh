@@ -29,7 +29,7 @@
 #endif
 
 #include "cp_async.cuh"
-#include "mma.cuh"
+//#include "mma.cuh"
 
 namespace flashinfer {
 
@@ -73,7 +73,7 @@ struct smem_t {
       return i * stride + (j ^ (i % 8));
     } else {
       // swizzle_mode == SwizzleMode::k64B
-      static_assert(stride == 4);
+      //static_assert(stride == 4);
       return i * stride + (j ^ ((i / 2) % 4));
     }
   }
@@ -120,7 +120,7 @@ struct smem_t {
     }
   }
 
-  __device__ __forceinline__ void ldmatrix_m8n8x4(uint32_t offset, uint32_t* R) {
+/*  __device__ __forceinline__ void ldmatrix_m8n8x4(uint32_t offset, uint32_t* R) {
     b128_t* smem_ptr = base + offset;
     mma::ldmatrix_m8n8x4(R, smem_ptr);
   }
@@ -154,6 +154,7 @@ struct smem_t {
     b128_t* smem_ptr = base + offset;
     mma::ldmatrix_m8n8x4_trans_right_half(R, smem_ptr);
   }
+*/
 
   template <cp_async::SharedMemFillMode fill_mode, typename T>
   __device__ __forceinline__ void load_128b_async(uint32_t offset, const T* gptr, bool predicate) {

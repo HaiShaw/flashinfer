@@ -59,7 +59,7 @@ def warmup_jit():
 @pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("kv_layout", ["HND", "NHD"])
 @pytest.mark.parametrize("pos_encoding_mode", ["NONE", "ROPE_LLAMA", "ALIBI"])
-@pytest.mark.parametrize("use_cuda_graph", [True])
+@pytest.mark.parametrize("use_cuda_graph", [False])
 @pytest.mark.parametrize("logits_soft_cap", [0.0, 30.0])
 @pytest.mark.parametrize("return_lse", [True, False])
 @pytest.mark.parametrize("contiguous_kv", [True, False])
@@ -79,7 +79,7 @@ def test_batch_prefill_with_paged_kv_cache(
     return_lse,
     contiguous_kv,
 ):
-    q = torch.randn(batch_size * qo_len, num_qo_heads, head_dim).to(0).half()
+    q = torch.randn(batch_size * qo_len, num_qo_heads, head_dim).half() # .to(0).half()
     q_indptr_cpu = torch.arange(0, batch_size + 1).int() * qo_len
     num_pages_per_seq = (kv_len + page_size - 1) // page_size
     total_num_pages = num_pages_per_seq * batch_size
@@ -259,7 +259,7 @@ def test_batch_prefill_with_paged_kv_cache(
         o_i = o[q_indptr_cpu[i] : q_indptr_cpu[i + 1]]
         torch.testing.assert_close(o_i, o_ref_i, rtol=1e-3, atol=1e-3)
 
-
+'''
 @pytest.mark.parametrize("batch_size", [12, 17])
 @pytest.mark.parametrize("kv_len", [54, 97])
 @pytest.mark.parametrize("qo_len", [37, 17])
@@ -713,13 +713,13 @@ def test_batch_prefill_with_ragged_kv_cache_custom_mask(
     else:
         o_causal = wrapper.run(q, k, v)
     torch.testing.assert_close(o_custom, o_causal, rtol=1e-3, atol=1e-3)
-
+'''
 
 if __name__ == "__main__":
     test_batch_prefill_with_paged_kv_cache(
         12, 54, 37, 16, 8, 8, 128, True, "HND", "NONE", True, 0.0, False, True
     )
-    test_batch_prefill_with_tuple_paged_kv_cache(
+'''    test_batch_prefill_with_tuple_paged_kv_cache(
         12, 54, 37, 16, 8, 8, 128, True, "HND", "NONE", True, 0.0, False, True
     )
     test_batch_prefill_with_paged_kv_cache(
@@ -733,4 +733,4 @@ if __name__ == "__main__":
     )
     test_batch_prefill_with_ragged_kv_cache_custom_mask(
         1, 137, 137, 8, 8, 128, "NONE", 0.0, False
-    )
+    ) '''

@@ -33,6 +33,22 @@ namespace flashinfer {
 
 DEFINE_HAS_MEMBER(maybe_mask_indptr)
 
+  template <typename T>
+  __device__ __forceinline__ float T2float(T q) {
+    if constexpr(std::is_same<T, __half>::value)
+	    return __half2float(q);
+    else
+	    return float(q);
+  }
+
+  template <typename T>
+  __device__ __forceinline__ T float2T(float q) {
+    if constexpr(std::is_same<T, __half>::value)
+	    return __float2half(q);
+    else
+	    return float(q);
+  }
+
 template <bool use_custom_mask, bool use_sliding_window, bool use_logits_soft_cap, bool use_alibi>
 struct DefaultAttention : AttentionVariantBase {
   static constexpr bool use_softmax = true;
