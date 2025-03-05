@@ -834,7 +834,7 @@ def test_batch_prefill_with_ragged_kv_cache_custom_mask(
 '''
 
 if __name__ == "__main__":
-    test_batch_prefill_with_paged_kv_cache(
+    default_batch_prefill_with_paged_kv_cache_params = dict(
         batch_size=12,
         kv_len=54,
         qo_len=37,
@@ -855,6 +855,13 @@ if __name__ == "__main__":
         kv_init_min=-3,
         kv_init_max=3,
         seed=19378,
+    )
+
+    softcap_batch_prefill_with_paged_kv_cache_params = \
+        default_batch_prefill_with_paged_kv_cache_params | dict(logits_soft_cap=30.0)
+
+    test_batch_prefill_with_paged_kv_cache(
+        **softcap_batch_prefill_with_paged_kv_cache_params
     )
 '''    test_batch_prefill_with_tuple_paged_kv_cache(
         12, 54, 37, 16, 8, 8, 128, True, "HND", "NONE", True, 0.0, False, True
