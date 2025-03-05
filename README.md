@@ -1,3 +1,12 @@
+1. This is FMA hip version of flashinfer git-6805c643a933088d043fed86a0ec15ef76863343 (Feb14th)
+2. cp /opt/rocm-6.3.0/include/hip/driver_types.h /opt/rocm-6.3.0/include/hip/hip_driver_types.h
+2. Delete any prior flashinfer references in: find / -name easy-install.pth
+4. rm /root/.cache/flashinfer  -r -f
+5. git checkout flashinfer/jit/aot_config.py
+6. PYTORCH_ROCM_ARCH="native gfx90a gfx940 gfx941 gfx942" FLASHINFER_ENABLE_AOT=1 FLASHINFER_ENABLE_SM90=0 python setup.py develop
+7. PYTORCH_ROCM_ARCH="native gfx90a gfx940 gfx941 gfx942" FLASHINFER_ENABLE_AOT=1 FLASHINFER_ENABLE_SM90=0 pip install --no-build-isolation --verbose --editable . > runlog.txt 2>&1
+8. pytest -sv tests/trmd_test_batch_prefill_kernels_sgln.py
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://github.com/flashinfer-ai/web-data/blob/main/logo/FlashInfer-black-background.png?raw=true">
