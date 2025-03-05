@@ -1428,7 +1428,6 @@ class BatchPrefillWithPagedKVCacheWrapper:
         if self._backend == "fa2":
             self._cached_module = get_batch_prefill_module(*get_module_args)
             with self.device as device:
-                print(".")
                 self._plan_info = self._cached_module.plan(
                     self._float_workspace_buffer,
                     self._int_workspace_buffer,
