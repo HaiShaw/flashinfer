@@ -283,10 +283,19 @@ __forceinline__ __device__ __host__ T1 ceil_div(const T1 x, const T2 y) {
 inline std::pair<int, int> GetCudaComputeCapability() {
   int device_id = 0;
   gpuError_t result = gpuGetDevice(&device_id);
+  if (result != gpuSuccess) {
+    return {0, 0};
+  }
   int major = 0, minor = 0;
-  gpuDeviceGetAttribute(&major, gpuDevAttrComputeCapabilityMajor, device_id);
-  gpuDeviceGetAttribute(&minor, gpuDevAttrComputeCapabilityMinor, device_id);
-  return std::make_pair(major, minor);
+  result = gpuDeviceGetAttribute(&major, gpuDevAttrComputeCapabilityMajor, device_id);
+  if (result != gpuSuccess) {
+    return {0, 0};
+  }
+  result = gpuDeviceGetAttribute(&minor, gpuDevAttrComputeCapabilityMinor, device_id);
+  if (result != gpuSuccess) {
+    return {0, 0};
+  }
+  return {major, minor};
 }
 
 template <typename T>
