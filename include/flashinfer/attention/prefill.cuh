@@ -637,6 +637,25 @@ __device__ __forceinline__ void k_smem_inplace_apply_rotary(
   }
 }
 
+
+union b128_h {
+  b128_t b128;
+  gpu_bfloat16 bf[8];
+  half h[8];
+  uint32_t i[4];
+  __device__ b128_h() { 
+    memset( this, 0, sizeof( b128_h ) ); 
+  }
+};
+
+union hfbhf {
+  gpu_bfloat16 bf;
+  half h;
+  __device__ hfbhf() { 
+    memset( this, 0, sizeof( hfbhf ) ); 
+  }
+};
+
 template <typename KTraits>
 __device__ __forceinline__ void compute_qk(
     smem_t<KTraits::SWIZZLE_MODE_Q>* q_smem, uint32_t* q_smem_offset_r,
@@ -646,13 +665,6 @@ __device__ __forceinline__ void compute_qk(
   constexpr uint32_t UPCAST_STRIDE_K = KTraits::UPCAST_STRIDE_K;
   uint32_t a_frag[KTraits::NUM_MMA_Q][4], b_frag[4];
 
-  typedef union b128_h {
-          b128_t b128;
-          __hip_bfloat16 bf[8];
-          __half h[8];
-          uint32_t i[4];
-	  __device__ b128_h() { memset( this, 0, sizeof( b128_h ) ); }
-  };
   b128_h b128_h_;
   b128_h b128_h_a_frag[KTraits::NUM_MMA_Q];
   b128_h b128_h_b_frag;
@@ -1157,14 +1169,6 @@ __device__ __forceinline__ void compute_sfm_v(
     }
   }
 
-
-  typedef union b128_h {
-          b128_t b128;
-          __hip_bfloat16 bf[8];
-          __half h[8];
-          uint32_t i[4];
-          __device__ b128_h() { memset( this, 0, sizeof( b128_h ) ); }
-  };
   b128_h b128_h_;
   b128_h b128_h_a_frag;
   b128_h b128_h_b_frag;
@@ -1211,11 +1215,6 @@ __device__ __forceinline__ void compute_sfm_v(
       int thrd4 = threadIdx.x%4;
       int bnd4  = (threadIdx.x/4)*4;
       int bnd32 = (threadIdx.y%2)*32;
-      typedef union hfbhf {
-          __hip_bfloat16 bf;
-          __half h;
-	  __device__ hfbhf() { memset( this, 0, sizeof( hfbhf ) ); }
-      };
       hfbhf pnrhbh;
       hfbhf tmp[4][8]; 
       //lane 0-7
