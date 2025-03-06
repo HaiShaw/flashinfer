@@ -286,13 +286,11 @@ if enable_aot:
     hipcc_flags = [
         "-O3",
         "-std=c++17",
-        "-Xcompiler",
         "-fPIC",
         "--offload-arch=gfx942",
         "-ffast-math",
         "-I/opt/rocm/include",
         "-L/opt/rocm/lib",
-        "-lamdhip64",
         "-D__HIP_PLATFORM_AMD__=1",
     ]
     kernel_sources = [
