@@ -288,7 +288,6 @@ if enable_aot:
         "-std=c++17",
         "-Xcompiler",
         "-fPIC",
-        "--amdgpu-target=gfx942",
         "--offload-arch=gfx942",
         "-ffast-math",
         "-I/opt/rocm/include",
