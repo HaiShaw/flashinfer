@@ -359,21 +359,55 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
     uint32_t kv_idx = kv_idx_base + warp_idx * 4 + lane_idx / 8;
     // NOTE(Zihao): NUM_MMA_KV * 4 / NUM_WARPS_Q = NUM_WARPS_KV * NUM_MMA_KV * 4 / num_warps
     static_assert(NUM_MMA_KV * 4 % NUM_WARPS_Q == 0);
+    //printf("\n-----%d,------\n", NUM_WARPS_Q);
+    constexpr uint32_t UNRLkvq_ATMP = 4;
+    constexpr uint32_t NUM_MMA_KVQ = NUM_MMA_KV * 4 / NUM_WARPS_Q;
+    constexpr uint32_t NUM_MMA_KVQ_UNRL = NUM_MMA_KVQ / UNRLkvq_ATMP;
+    constexpr uint32_t NUM_MMA_KVQ_UNRLD = NUM_MMA_KVQ_UNRL>1?NUM_MMA_KVQ_UNRL:1;
+    constexpr uint32_t UNRLkvq = NUM_MMA_KVQ/NUM_MMA_KVQ_UNRLD;
+    //printf("\n-----%d,%d------\n", UNRLkvq, NUM_MMA_KVQ_UNRLD);
 #pragma unroll
-    for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i) {
-      DType* gptr = produce_v ? paged_kv.v_data + kv_offset[i] : paged_kv.k_data + kv_offset[i];
+    //for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i) {
+    for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i) {
+     uint4 load_vals[UNRLkvq][NUM_MMA_D / (8 / sizeof(DType))];
+     bool  pred_vals[UNRLkvq][NUM_MMA_D / (8 / sizeof(DType))];
+#pragma unroll
+     for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_) {
+      DType* gptr = produce_v ? paged_kv.v_data + kv_offset[i*UNRLkvq+i_] : paged_kv.k_data + kv_offset[i*UNRLkvq+i_];
 #pragma unroll
       for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j) {
         //smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
 //hipFIXED
-        smem.template load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
-        *smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
+        //smem.template load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
+        //*smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
+        const b128_t* gmem_ptr = reinterpret_cast<const b128_t*>(gptr);
+        bool predicate = kv_idx < kv_len;
+	pred_vals[i_][j] = predicate;
+        load_vals[i_][j] = make_uint4(0, 0, 0, 0);
+	if (predicate)
+          load_vals[i_][j] = *((uint4*)gmem_ptr);
         gptr += 8 * num_elems_per_128b<DType>();
       }
       kv_idx += num_warps * 4;
+     }
+#pragma unroll
+     for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_) {
+#pragma unroll
+      for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j) {
+        b128_t* smem_ptr = smem.base + *smem_offset;
+        if (pred_vals[i_][j]) {
+   	  *((uint4*)smem_ptr) = load_vals[i_][j];
+        } else {
+          if constexpr (fill_mode == SharedMemFillMode::kFillZero) {
+	      *((uint4*)smem_ptr) = make_uint4(0, 0, 0, 0);
+          }
+        }
+        *smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
+      }
       *smem_offset =
           smem.template advance_offset_by_row<num_warps * 4, channel_size_128b_kv>(*smem_offset) -
           sizeof(DType) * NUM_MMA_D;
+     }
     }
     *smem_offset -= NUM_WARPS_KV * NUM_MMA_KV * 16 * channel_size_128b_kv;
   } else {
@@ -459,28 +493,76 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
   if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0) {
     uint32_t q_smem_offset_w = q_smem->template get_permuted_offset<channel_size_128b_q>(
         warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8);
-
+    //printf("-----%d,%d,%d----", NUM_MMA_Q, 4/*UNRLq*/, NUM_MMA_D/4 );
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
+      constexpr uint32_t UNRLq = 4;
+      for (uint32_t j = 0; j < 4/UNRLq; ++j) {
+      uint4 load_vals[UNRLq][NUM_MMA_D / 4];
+      bool pred_vals[UNRLq][NUM_MMA_D / 4];
+      DTypeQ* qptr_vals[UNRLq];
+      uint32_t qidx_vals[UNRLq];
 #pragma unroll
-      for (uint32_t j = 0; j < 4; ++j) {
+      for (uint32_t j_ = 0; j_ < UNRLq; ++j_) {
         uint32_t q, r;
-        group_size.divmod(packed_offset + lane_idx / 8 + mma_q * 16 + j * 4, q, r);
-        const uint32_t q_idx = q;
-        DTypeQ* q_ptr = q_ptr_base + q * q_stride_n + r * q_stride_h;
-#pragma unroll
+        group_size.divmod(packed_offset + lane_idx / 8 + mma_q * 16 + (j*UNRLq+j_) * 4, q, r);
+        //const uint32_t q_idx = q;
+        qidx_vals[j_] = q;
+        //DTypeQ* q_ptr = q_ptr_base + q * q_stride_n + r * q_stride_h;
+        qptr_vals[j_] = q_ptr_base + q * q_stride_n + r * q_stride_h;
+      }
+//#pragma unroll UNRLq
+//      for (uint32_t j_ = 0; j_ < UNRLq; ++j_) {
+//#pragma unroll (NUM_MMA_D / 4)
+//        for (uint32_t mma_do = 0; mma_do < NUM_MMA_D / 4; ++mma_do) {
+#pragma unroll (UNRLq * (NUM_MMA_D / 4))
+        for (uint32_t mma_do_j = 0; mma_do_j < UNRLq * (NUM_MMA_D / 4); ++mma_do_j) {
+	  //uint32_t mma_do = mma_do_j % (NUM_MMA_D / 4);
+	  uint32_t j_ = mma_do_j % UNRLq;
+	  //uint32_t j_ = mma_do_j / (NUM_MMA_D / 4);
+	  uint32_t mma_do = mma_do_j / UNRLq;
+          // load q fragment from gmem to smem
+          //q_smem->load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
+//hipFIXED
+          //q_smem->template load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
+          //                                                    q_idx < qo_upper_bound);
+          const b128_t* gmem_ptr = reinterpret_cast<const b128_t*>(qptr_vals[j_]);
+          bool predicate = qidx_vals[j_] < qo_upper_bound;
+          load_vals[j_][mma_do] = make_uint4(0, 0, 0, 0);
+	  if (predicate)
+            load_vals[j_][mma_do] = *((uint4*)gmem_ptr);
+	  pred_vals[j_][mma_do] = predicate;
+
+	  //b128_t* smem_ptr = q_smem->base + q_smem_offset_w;
+          //if (predicate)
+	  //  *((uint4*)smem_ptr) = load_vals[j][mma_do];
+
+          qptr_vals[j_] += 8 * num_elems_per_128b<DTypeQ>();
+	}
+      //}
+#pragma unroll UNRLq
+      for (uint32_t j_ = 0; j_ < UNRLq; ++j_) {
+        //uint32_t q, r;
+        //group_size.divmod(packed_offset + lane_idx / 8 + mma_q * 16 + (j*UNRLq+j_) * 4, q, r);
+        //const uint32_t q_idx = q;
+        //DTypeQ* q_ptr = q_ptr_base + q * q_stride_n + r * q_stride_h;
+#pragma unroll (NUM_MMA_D / 4)
         for (uint32_t mma_do = 0; mma_do < NUM_MMA_D / 4; ++mma_do) {
           // load q fragment from gmem to smem
           //q_smem->load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
 //hipFIXED
-          q_smem->template load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
-                                                              q_idx < qo_upper_bound);
-          q_smem_offset_w = q_smem->template advance_offset_by_column<8>(q_smem_offset_w, mma_do);
-          q_ptr += 8 * num_elems_per_128b<DTypeQ>();
+          //q_smem->template load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
+          //                                                    q_idx < qo_upper_bound);
+	  b128_t* smem_ptr = q_smem->base + q_smem_offset_w;
+          if (pred_vals[j_][mma_do])
+	    *((uint4*)smem_ptr) = load_vals[j_][mma_do];
+
+           q_smem_offset_w = q_smem->template advance_offset_by_column<8>(q_smem_offset_w, mma_do);
         }
         q_smem_offset_w =
             q_smem->template advance_offset_by_row<4, channel_size_128b_q>(q_smem_offset_w) -
             (NUM_MMA_D / 4) * 8;
+      }
       }
     }
   }
