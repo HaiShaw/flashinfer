@@ -344,23 +344,19 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                                                 const paged_kv_t<DType, IdType>& paged_kv,
                                                 const uint32_t kv_idx_base, const size_t* kv_offset,
                                                 const uint32_t kv_len) {
-  if (CUDA_WARP_SIZE <= threadIdx.x) {
-    return;
-  }
-
   // NOTE(Zihao): for fp8, this function doesn't work for head_dim = 64 at the moment
   constexpr SharedMemFillMode fill_mode =
       produce_v ? SharedMemFillMode::kFillZero : SharedMemFillMode::kNoFill;
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
   constexpr uint32_t num_warps = NUM_WARPS_Q * NUM_WARPS_KV;
   constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DType>();
-  const uint32_t warp_idx = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(), lane_idx = threadIdx.x;
+  const uint32_t warp_idx = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(), real_lane_idx = threadIdx.x;
   if constexpr (swizzle_mode == SwizzleMode::k128B) {
-    uint32_t kv_idx = kv_idx_base + warp_idx * 4 + lane_idx / 8;
+    uint32_t kv_idx = kv_idx_base + warp_idx * 8 + real_lane_idx / 8;
     // NOTE(Zihao): NUM_MMA_KV * 4 / NUM_WARPS_Q = NUM_WARPS_KV * NUM_MMA_KV * 4 / num_warps
     static_assert(NUM_MMA_KV * 4 % NUM_WARPS_Q == 0);
 #pragma unroll
-    for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i) {
+    for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q / 2; ++i) {
       DType* gptr = produce_v ? paged_kv.v_data + kv_offset[i] : paged_kv.k_data + kv_offset[i];
 #pragma unroll
       for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j) {
@@ -370,14 +366,14 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
         *smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
         gptr += 8 * num_elems_per_128b<DType>();
       }
-      kv_idx += num_warps * 4;
+      kv_idx += num_warps * 8;
       *smem_offset =
-          smem.template advance_offset_by_row<num_warps * 4, channel_size_128b_kv>(*smem_offset) -
+          smem.template advance_offset_by_row<num_warps * 8, channel_size_128b_kv>(*smem_offset) -
           sizeof(DType) * NUM_MMA_D;
     }
     *smem_offset -= NUM_WARPS_KV * NUM_MMA_KV * 16 * channel_size_128b_kv;
   } else {
-    uint32_t kv_idx = kv_idx_base + warp_idx * 8 + lane_idx / 4;
+    uint32_t kv_idx = kv_idx_base + warp_idx * 8 + real_lane_idx / 4;
     // NOTE(Zihao): NUM_MMA_KV * 2 / NUM_WARPS_Q = NUM_WARPS_KV * NUM_MMA_KV * 2 / num_warps
     static_assert(NUM_MMA_KV * 2 % NUM_WARPS_Q == 0);
 #pragma unroll
@@ -1946,14 +1942,14 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
 
     constexpr SwizzleMode swizzle_mode_kv =
         (sizeof(DTypeKV) == 1 && head_dim == 64) ? SwizzleMode::k64B : SwizzleMode::k128B;
-    constexpr uint32_t kv_frag_rows = swizzle_mode_kv == SwizzleMode::k128B ? 4 : 8;
+    constexpr uint32_t kv_frag_rows = swizzle_mode_kv == SwizzleMode::k128B ? 8 : 8;
     constexpr uint32_t kv_frag_cols = swizzle_mode_kv == SwizzleMode::k128B ? 8 : 4;
     smem_t<swizzle_mode_kv> k_smem(smem +
                                    (NUM_WARPS_Q * NUM_MMA_Q * sizeof(DTypeQ)) * 16 * head_dim),
         v_smem(smem + (NUM_WARPS_Q * NUM_MMA_Q * sizeof(DTypeQ) +
                        NUM_WARPS_KV * NUM_MMA_KV * sizeof(DTypeKV)) *
                           16 * head_dim);
-    size_t kv_offset[NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q];
+    size_t kv_offset[NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q / 2];
 
     uint32_t k_smem_offset_r = k_smem.template get_permuted_offset<channel_size_128b_kv>(
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
@@ -1962,17 +1958,17 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
                  real_lane_idx / 16 / 2),
              kv_smem_offset_w = k_smem.template get_permuted_offset<channel_size_128b_kv>(
-                 warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);
+                 warp_idx * kv_frag_rows + real_lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);
     const IdType last_indptr = paged_kv.indptr[paged_kv.batch_size];
 
     uint32_t packed_page_iter_base =
         paged_kv.indptr[request_idx] * paged_kv.page_size + chunk_start;
 #pragma unroll
     for (uint32_t i = 0;
-         i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
+         i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q / 2; ++i) {
       uint32_t page_iter, entry_idx;
       paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows +
-                                    lane_idx / kv_frag_cols +
+                                    real_lane_idx / kv_frag_cols +
                                     kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
                                 page_iter, entry_idx);
       kv_offset[i] = paged_kv.protective_get_kv_offset(
@@ -2013,10 +2009,10 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
       packed_page_iter_base += 16 * NUM_WARPS_KV * NUM_MMA_KV;
 #pragma unroll
       for (uint32_t i = 0;
-           i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
+           i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q / 2; ++i) {
         uint32_t page_iter, entry_idx;
         paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows +
-                                      lane_idx / kv_frag_cols +
+                                      real_lane_idx / kv_frag_cols +
                                       kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
                                   page_iter, entry_idx);
         kv_offset[i] = paged_kv.protective_get_kv_offset(
