@@ -572,24 +572,20 @@ template <uint32_t NUM_WARPS_Q, uint32_t NUM_WARPS_KV, uint32_t NUM_MMA_Q, uint3
 __device__ __forceinline__ void q_smem_inplace_transform(
     const typename AttentionVariant::ParamsT& params, AttentionVariant variant,
     smem_t<swizzle_mode>* q_smem) {
-  if (CUDA_WARP_SIZE <= threadIdx.x) {
-    return;
-  }
-
   using DTypeQ = typename AttentionVariant::DTypeQ;
-  const uint32_t warp_idx = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(), lane_idx = threadIdx.x;
+  const uint32_t warp_idx = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(), real_lane_idx = threadIdx.x;
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
   constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
   constexpr uint32_t num_warps = NUM_WARPS_Q * NUM_WARPS_KV;
 #pragma unroll
-  for (uint32_t i = 0; i < NUM_MMA_Q * head_dim / (NUM_WARPS_KV * 16); ++i) {
+  for (uint32_t i = 0; i < NUM_MMA_Q * head_dim / (NUM_WARPS_KV * 16) / 2; ++i) {
     vec_t<DTypeQ, 8> tmp;
-    tmp.load((DTypeQ*)(q_smem->base) + (i * num_warps + warp_idx) * 256 + lane_idx * 8);
+    tmp.load((DTypeQ*)(q_smem->base) + (i * num_warps + warp_idx) * WARP_SIZE * 8 + real_lane_idx * 8);
 #pragma unroll
     for (uint32_t reg_id = 0; reg_id < 8; ++reg_id) {
       tmp[reg_id] = variant.QueryTransform(params, tmp[reg_id]);
     }
-    tmp.store((DTypeQ*)(q_smem->base) + (i * num_warps + warp_idx) * 256 + lane_idx * 8);
+    tmp.store((DTypeQ*)(q_smem->base) + (i * num_warps + warp_idx) * WARP_SIZE * 8 + real_lane_idx * 8);
   }
 }
 
