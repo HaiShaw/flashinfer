@@ -444,24 +444,20 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
                                                    const uint32_t q_stride_h,
                                                    const uint_fastdiv group_size,
                                                    smem_t<swizzle_mode>* q_smem) {
-  if (CUDA_WARP_SIZE <= threadIdx.x) {
-    return;
-  }
-
   constexpr uint32_t head_dim = NUM_MMA_D * 16;
   constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
-  const uint32_t lane_idx = threadIdx.x, warp_idx_x = get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>();
+  const uint32_t real_lane_idx = threadIdx.x, warp_idx_x = get_warp_idx_q<NUM_WARPS_Q, NUM_WARPS_KV>();
 
   if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0) {
     uint32_t q_smem_offset_w = q_smem->template get_permuted_offset<channel_size_128b_q>(
-        warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8);
+        warp_idx_x * NUM_MMA_Q * 16 + real_lane_idx / 8, real_lane_idx % 8);
 
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
-      for (uint32_t j = 0; j < 4; ++j) {
+      for (uint32_t j = 0; j < 2; ++j) {
         uint32_t q, r;
-        group_size.divmod(packed_offset + lane_idx / 8 + mma_q * 16 + j * 4, q, r);
+        group_size.divmod(packed_offset + real_lane_idx / 8 + mma_q * 16 + j * 8, q, r);
         const uint32_t q_idx = q;
         DTypeQ* q_ptr = q_ptr_base + q * q_stride_n + r * q_stride_h;
 #pragma unroll
@@ -475,7 +471,7 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
           q_ptr += 8 * num_elems_per_128b<DTypeQ>();
         }
         q_smem_offset_w =
-            q_smem->template advance_offset_by_row<4, channel_size_128b_q>(q_smem_offset_w) -
+            q_smem->template advance_offset_by_row<8, channel_size_128b_q>(q_smem_offset_w) -
             (NUM_MMA_D / 4) * 8;
       }
     }
