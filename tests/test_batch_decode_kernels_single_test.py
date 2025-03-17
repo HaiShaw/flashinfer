@@ -5,7 +5,7 @@ This is for profiling purpose only
 
 import torch
 import flashinfer
-
+import argparse
 def test_batch_decode_with_paged_kv_cache(
     batch_size,
     kv_len,
@@ -79,18 +79,29 @@ def test_batch_decode_with_paged_kv_cache(
 
 
 if __name__ == "__main__":    
+    parser = argparse.ArgumentParser(description="Run test_batch_decode_with_paged_kv_cache with arguments")
+    parser.add_argument("--batch_size", type=int, default=256, help="Batch size (default: 256)")
+    parser.add_argument("--kv_len", type=int, default=128, help="KV length (default: 128)")
+    parser.add_argument("--page_size", type=int, default=8, help="Page size (default: 8)")
+    parser.add_argument("--num_kv_heads", type=int, default=1, help="Number of KV heads (default: 8)")
+    parser.add_argument("--num_qo_heads", type=int, default=8, help="Number of QO heads (default: 8)")
+    parser.add_argument("--head_dim", type=int, default=128, help="Head dimension (default: 256)")
+    parser.add_argument("--warmup", type=int, default=10, help="warmup (default: 2)")
+    args = parser.parse_args()
+
     test_batch_decode_with_paged_kv_cache(
-        256,
-        54,
-        8,
-        8,
-        8,
-        128,
+        args.batch_size,
+        args.kv_len,
+        args.page_size,
+        args.num_kv_heads,
+        args.num_qo_heads,
+        args.head_dim,
         "NHD",
         "NONE",
         0.0,
         torch.float16,
         torch.float16,
         True,
-        10
+        args.warmup
     )
+    print(" BatchDecodeWithPagedKVCacheDispatched "+" ".join(f"{key}={value}" for key, value in vars(args).items()))
