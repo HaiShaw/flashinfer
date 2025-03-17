@@ -763,11 +763,15 @@ gpuError_t BatchDecodeWithPagedKVCacheDispatched(typename AttentionVariant::Para
 #endif
   auto compute_capacity = GetCudaComputeCapability();
   constexpr uint32_t bdx = HEAD_DIM / vec_size;
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+  static_assert(bdx <= 64);
+#else
   static_assert(bdx <= 32);
+#endif
   DISPATCH_GQA_GROUP_SIZE(num_qo_heads / num_kv_heads, GROUP_SIZE, {
     constexpr uint32_t bdy = GROUP_SIZE;
 #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
-    constexpr uint32_t num_threads = 128U < bdx * bdy ? bdx * bdy : 128U;
+    constexpr uint32_t num_threads = (GROUP_SIZE == 6) ? 192U : (128U < bdx * bdy ? bdx * bdy : 128U);
 #else
     constexpr uint32_t num_threads = std::max(128U, bdx * bdy);
 #endif
