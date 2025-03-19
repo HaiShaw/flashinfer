@@ -502,11 +502,70 @@ __global__ void BatchDecodeWithPagedKVCacheKernel(const __grid_constant__
   size_t kv_offset[tile_size_per_bdx];
 #pragma unroll
   for (uint32_t iter = 0; iter < num_stages_smem; ++iter) {
+    DTypeKV* gptr_k[tile_size_per_bdx];
+    DTypeKV* gptr_v[tile_size_per_bdx];
+  
 #pragma unroll
     for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
       kv_offset[j] =
           kv_offset_smem[((iter * bdz + tz) * bdy + ty) * tile_size_per_bdx + j] + tx * vec_size;
+          gptr_k[j] =  paged_kv.k_data+ kv_offset[j];
+          gptr_v[j] =  paged_kv.v_data+ kv_offset[j];
     }
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+     uint4 load_vals[tile_size_per_bdx];
+#pragma unroll tile_size_per_bdx
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+
+      const uint4* gmem_ptr = reinterpret_cast<const uint4*>(gptr_k[j]);
+
+      bool predicate =  ((iter * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size;
+      if (predicate){
+        load_vals[j] = *((uint4*)gptr_k[j]);
+
+      }else{
+         load_vals[j] = make_uint4(0, 0, 0, 0);
+      }
+    }
+
+#pragma unroll tile_size_per_bdx
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      int index = (((stage_idx * bdz + tz) * bdy + ty) * tile_size_per_bdx + j) * head_dim +
+        tx * vec_size;
+      uint4* smem_ptr =  (uint4*) (k_smem + index);
+      bool predicate =  ((iter * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size;
+      if (predicate){
+        *((uint4*)smem_ptr) = load_vals[j];
+      }
+      else{
+        *((uint4*)smem_ptr)=make_uint4(0, 0, 0, 0);
+      }
+    }
+#pragma unroll tile_size_per_bdx
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      const uint4* gmem_ptr = reinterpret_cast<const uint4*>(gptr_v[j]);
+      bool predicate =  ((iter * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size;
+      if (predicate){
+        load_vals[j] = *((uint4*)gptr_v[j]);
+      }else{
+        load_vals[j] = make_uint4(0, 0, 0, 0);
+      }
+    }
+
+#pragma unroll tile_size_per_bdx
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      int index = (((stage_idx * bdz + tz) * bdy + ty) * tile_size_per_bdx + j) * head_dim +
+       tx * vec_size;
+      uint4* smem_ptr =  (uint4*) (v_smem + index);
+      bool predicate =  ((iter * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size;
+      if (predicate){
+        *((uint4*)smem_ptr) = load_vals[j];
+      }
+      else{
+        *((uint4*)smem_ptr)=make_uint4(0, 0, 0, 0);
+      }
+    }
+#elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #pragma unroll
     for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
       cp_async::pred_load<vec_bits, PrefetchMode::kPrefetch, SharedMemFillMode::kNoFill>(
@@ -516,6 +575,7 @@ __global__ void BatchDecodeWithPagedKVCacheKernel(const __grid_constant__
           ((iter * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size);
     }
     cp_async::commit_group();
+
 #pragma unroll
     for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
       cp_async::pred_load<vec_bits, PrefetchMode::kPrefetch, SharedMemFillMode::kFillZero>(
@@ -525,15 +585,17 @@ __global__ void BatchDecodeWithPagedKVCacheKernel(const __grid_constant__
           ((iter * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size);
     }
     cp_async::commit_group();
+#endif
+
     stage_idx = (stage_idx + 1) % num_stages_smem;
   }
-
   state_t<vec_size> st;
   float s[bdy * tile_size_per_bdx];
 
 #pragma unroll 2
   for (uint32_t iter = 0; iter < ceil_div(chunk_size, tile_size_per_bdx * bdy * bdz); ++iter) {
     if ((iter + num_stages_smem) % bdx == 0) {
+
 #pragma unroll
       for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
         uint32_t q, r;
@@ -545,44 +607,106 @@ __global__ void BatchDecodeWithPagedKVCacheKernel(const __grid_constant__
             paged_kv.protective_get_kv_offset(q, kv_head_idx, r, 0, last_indptr);
       }
     }
+
     // compute qk
+#if defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
     cp_async::wait_group<2 * num_stages_smem - 1>();
+#endif
+    uint32_t index_tile = iter * tile_size_per_bdx * bdy * bdz;
+    uint32_t index_ksmem = (stage_idx * bdz + tz) * bdy * tile_size_per_bdx * head_dim;
     block.sync();
     compute_qk<POS_ENCODING_MODE, vec_size, bdx, bdy * tile_size_per_bdx, AttentionVariant>(
         params, variant, batch_idx,
-        k_smem + (stage_idx * bdz + tz) * bdy * tile_size_per_bdx * head_dim, q_vec, freq,
+        k_smem + index_ksmem , q_vec, freq,
         (paged_kv.rope_pos_offset == nullptr ? 0 : paged_kv.rope_pos_offset[batch_idx]) +
-            chunk_start + iter * tile_size_per_bdx * bdy * bdz,
-        iter * tile_size_per_bdx * bdy * bdz, chunk_size, qo_head_idx, kv_head_idx, s, st);
+            chunk_start + iter * index_tile, index_tile, chunk_size, qo_head_idx, kv_head_idx, s, st);
     block.sync();
+    
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
 
-#pragma unroll
+    DTypeKV* gptr_k[tile_size_per_bdx];
+    DTypeKV* gptr_v[tile_size_per_bdx];
+
+    vec_t<float, vec_size> k_vec, v_vec;
+#pragma unroll tile_size_per_bdx
     for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
       kv_offset[j] = kv_offset_smem[((((iter + num_stages_smem) % bdx) * bdz + tz) * bdy + ty) *
                                         tile_size_per_bdx +
                                     j] +
                      tx * vec_size;
+                     gptr_k[j] =  paged_kv.k_data+ kv_offset[j];
+                     gptr_v[j] =  paged_kv.v_data+ kv_offset[j];
     }
 
+    uint4 load_vals[tile_size_per_bdx];
+#endif
     // load k tiles
-#pragma unroll
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#pragma unroll tile_size_per_bdx
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      const uint4* gmem_ptr = reinterpret_cast<const uint4*>(gptr_k[j]);
+      bool predicate = (((iter + num_stages_smem) * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size;
+      if (predicate){
+        load_vals[j] = *((uint4*)gptr_k[j]);
+      }else{
+        load_vals[j] = make_uint4(0, 0, 0, 0);
+      }
+    }
+
+#pragma unroll tile_size_per_bdx
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      int index = (((stage_idx * bdz + tz) * bdy + ty) * tile_size_per_bdx + j) * head_dim + tx * vec_size;
+      uint4* smem_ptr =  (uint4*) (k_smem + index);
+      bool predicate = (((iter + num_stages_smem) * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size;
+      if (predicate){
+        *((uint4*)smem_ptr) = load_vals[j];
+      }
+      else{
+        *((uint4*)smem_ptr)=make_uint4(0, 0, 0, 0);
+      }
+    }
+#else
     for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
       cp_async::pred_load<vec_bits, PrefetchMode::kPrefetch, SharedMemFillMode::kNoFill>(
-          k_smem + (((stage_idx * bdz + tz) * bdy + ty) * tile_size_per_bdx + j) * head_dim +
-              tx * vec_size,
-          paged_kv.k_data + kv_offset[j],
-          (((iter + num_stages_smem) * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size);
+         k_smem + (((stage_idx * bdz + tz) * bdy + ty) * tile_size_per_bdx + j) * head_dim +
+             tx * vec_size,
+         paged_kv.k_data + kv_offset[j],
+         (((iter + num_stages_smem) * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size);
     }
     cp_async::commit_group();
-
-    // update m/d/o states
     cp_async::wait_group<2 * num_stages_smem - 1>();
+#endif
+    // update m/d/o states
+
     block.sync();
     update_local_state<vec_size, bdx, bdy * tile_size_per_bdx>(
-        v_smem + (stage_idx * bdz + tz) * bdy * tile_size_per_bdx * head_dim, s, stage_idx, st);
+        v_smem + index_ksmem, s, stage_idx, st);
     block.sync();
 
     // load v tiles
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#pragma unroll tile_size_per_bdx
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      bool predicate = (((iter + num_stages_smem) * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size;
+      if (predicate){
+        load_vals[j] = *((uint4*)gptr_v[j]);
+      }else{
+        load_vals[j] = make_uint4(0, 0, 0, 0);
+      }
+    }
+#pragma unroll tile_size_per_bdx
+    for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
+      bool predicate = (((iter + num_stages_smem) * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size;
+      int index = (((stage_idx * bdz + tz) * bdy + ty) * tile_size_per_bdx + j) * head_dim + tx * vec_size;
+      uint4* smem_ptr =  (uint4*) (v_smem + index);
+      if (predicate){
+        *((uint4*)smem_ptr) = load_vals[j];
+      }
+      else{
+        *((uint4*)smem_ptr)=make_uint4(0, 0, 0, 0);
+      }
+    }
+#else
 #pragma unroll
     for (uint32_t j = 0; j < tile_size_per_bdx; ++j) {
       cp_async::pred_load<vec_bits, PrefetchMode::kPrefetch, SharedMemFillMode::kFillZero>(
@@ -592,6 +716,7 @@ __global__ void BatchDecodeWithPagedKVCacheKernel(const __grid_constant__
           (((iter + num_stages_smem) * bdz + tz) * bdy + ty) * tile_size_per_bdx + j < chunk_size);
     }
     cp_async::commit_group();
+#endif 
     stage_idx = (stage_idx + 1) % num_stages_smem;
   }
   cp_async::wait_group<0>();
@@ -771,7 +896,7 @@ gpuError_t BatchDecodeWithPagedKVCacheDispatched(typename AttentionVariant::Para
   DISPATCH_GQA_GROUP_SIZE(num_qo_heads / num_kv_heads, GROUP_SIZE, {
     constexpr uint32_t bdy = GROUP_SIZE;
 #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
-    constexpr uint32_t num_threads = (GROUP_SIZE == 6) ? 192U : (128U < bdx * bdy ? bdx * bdy : 128U);
+    constexpr uint32_t num_threads = (GROUP_SIZE >= 6) ? (256U < bdx * bdy ? bdx * bdy : 256U) : (128U < bdx * bdy ? bdx * bdy : 128U);
 #else
     constexpr uint32_t num_threads = std::max(128U, bdx * bdy);
 #endif
