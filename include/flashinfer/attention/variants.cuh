@@ -290,7 +290,13 @@ struct ComposedAttention {
       logits = logits + params.alibi_slopes[qo_head_idx] * float(int(kv_idx) - int(qo_idx));
     }
     if constexpr (use_logits_soft_cap) {
-      logits = params.logits_soft_cap * math::log2e * float(math::tanh(logits));
+
+#if 0 // bad rocm perf with math::tanh() 
+	    logits = params.logits_soft_cap * math::log2e * float(math::tanh(logits));
+#else
+      logits = params.logits_soft_cap * math::log2e * (__builtin_amdgcn_sinh(logits)/__builtin_amdgcn_cosh(logits));
+#endif
+
     }
     return logits;
   }
