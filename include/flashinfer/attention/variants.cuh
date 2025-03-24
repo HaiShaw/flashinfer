@@ -294,7 +294,26 @@ struct ComposedAttention {
 #if 0 // bad rocm perf with math::tanh() 
 	    logits = params.logits_soft_cap * math::log2e * float(math::tanh(logits));
 #else
-      logits = params.logits_soft_cap * math::log2e * (__builtin_amdgcn_sinh(logits)/__builtin_amdgcn_cosh(logits));
+      //float ex2 = __builtin_amdgcn_exp2f((logits*2.0)*math::log2e);
+      //float tnh_ = ((ex2-1.0)/(ex2+1.0));
+      //logits = params.logits_soft_cap * math::log2e * ((ex2-1.0)/(ex2+1.0));
+      //APPROX...
+      float e, r, s, t, d;
+      float a = (float)logits;
+      s = fabsf (a);
+      t = -math::log2e * 2.0f * s;
+      e = __builtin_amdgcn_exp2f(t);
+      d = e + 1.0f;
+      r = __builtin_amdgcn_rcp(d);
+      r = e*(-r)+r;//fmaf (e, -r, r);
+      if (s < 4.997253418e-3f) r = a;
+      union fipnr {float f; unsigned int i;};
+      fipnr r_; r_.f = r;
+      fipnr a_; a_.f = a;
+      //if (!isnan(a)) //UNSAFE...
+      { r_.i = (r_.i|(a_.i&0x80000000)); r = r_.f; } // r = copysignf_pos (r, a);
+      logits = params.logits_soft_cap * math::log2e * r;
+       
 #endif
 
     }
