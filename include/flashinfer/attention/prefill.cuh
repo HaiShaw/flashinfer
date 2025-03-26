@@ -439,7 +439,7 @@ __device__ __forceinline__ void init_rope_freq(float (*rope_freq)[4],
 #pragma unroll
     for (uint32_t j = 0; j < 4; ++j) {
       rope_freq[mma_d][j] =
-          math::ptx_exp2(log2_rope_rcp_scale +
+          __builtin_amdgcn_exp2f(log2_rope_rcp_scale +
                          log2_rope_rcp_theta *
                              float(2 * ((mma_d * 16 + (j / 2) * 8 + (lane_idx % 4) * 2 + (j % 2)) %
                                         (head_dim / 2))) /
@@ -985,7 +985,7 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant,
           m[mma_q][j] = max(m[mma_q][j], math::shfl_xor_sync(m[mma_q][j], 0x10));
           m[mma_q][j] = max(m[mma_q][j], math::shfl_xor_sync(m[mma_q][j], 0x20));
 
-          float o_scale = math::ptx_exp2(m_prev - m[mma_q][j]);
+          float o_scale = __builtin_amdgcn_exp2f(m_prev - m[mma_q][j]);
           d[mma_q][j] *= o_scale;
 #pragma unroll
           for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
@@ -997,13 +997,13 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant,
 #pragma unroll
           for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
             s_frag[mma_q][mma_kv][j * 2 + 0] =
-                math::ptx_exp2(s_frag[mma_q][mma_kv][j * 2 + 0] - m[mma_q][j]);
+                __builtin_amdgcn_exp2f(s_frag[mma_q][mma_kv][j * 2 + 0] - m[mma_q][j]);
             s_frag[mma_q][mma_kv][j * 2 + 1] =
-                math::ptx_exp2(s_frag[mma_q][mma_kv][j * 2 + 1] - m[mma_q][j]);
+                __builtin_amdgcn_exp2f(s_frag[mma_q][mma_kv][j * 2 + 1] - m[mma_q][j]);
             s_frag[mma_q][mma_kv][j * 2 + 2] =
-                math::ptx_exp2(s_frag[mma_q][mma_kv][j * 2 + 2] - m[mma_q][j]);
+                __builtin_amdgcn_exp2f(s_frag[mma_q][mma_kv][j * 2 + 2] - m[mma_q][j]);
             s_frag[mma_q][mma_kv][j * 2 + 3] =
-                math::ptx_exp2(s_frag[mma_q][mma_kv][j * 2 + 3] - m[mma_q][j]);
+                __builtin_amdgcn_exp2f(s_frag[mma_q][mma_kv][j * 2 + 3] - m[mma_q][j]);
           }
         }
       }
@@ -1043,7 +1043,7 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant,
 #endif
 #pragma unroll
         for (uint32_t j = 0; j < 2; ++j) {
-          float o_scale = math::ptx_exp2(float(m_prev[j] - m[mma_q][j]));
+          float o_scale = __builtin_amdgcn_exp2f(float(m_prev[j] - m[mma_q][j]));
           d[mma_q][j] *= o_scale;
 #pragma unroll
           for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d) {
@@ -1224,7 +1224,7 @@ __device__ __forceinline__ void normalize_d(AttentionVariant variant, float (*o_
 #pragma unroll
       for (uint32_t j = 0; j < 1; ++j) {
         d_rcp[mma_q][j] =
-            (m[mma_q][j] != DTypeQKAccum(-math::inf)) ? math::ptx_rcp(d[mma_q][j]) : 0.f;
+            (m[mma_q][j] != DTypeQKAccum(-math::inf)) ? __builtin_amdgcn_rcpf(d[mma_q][j]) : 0.f;
       }
     }
 
@@ -1296,7 +1296,7 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
                                 lane_idx];
             float m_prev = m_new, d_prev = d_new;
             m_new = max(m_new, md.x);
-            d_new = d_prev * math::ptx_exp2(m_prev - m_new) + md.y * math::ptx_exp2(md.x - m_new);
+            d_new = d_prev * __builtin_amdgcn_exp2f(m_prev - m_new) + md.y * __builtin_amdgcn_exp2f(md.x - m_new);
           }
 
 #pragma unroll
@@ -1309,7 +1309,7 @@ __device__ __forceinline__ void threadblock_sync_mdo_states(
                                     WARP_SIZE +
                                 lane_idx];
             float mi = md.x;
-            o_scale[j][i] = math::ptx_exp2(float(mi - m_new));
+            o_scale[j][i] = __builtin_amdgcn_exp2f(float(mi - m_new));
           }
           m[mma_q][j] = DTypeQKAccum(m_new);
           d[mma_q][j] = d_new;
