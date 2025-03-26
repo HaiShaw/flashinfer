@@ -304,7 +304,7 @@ struct ComposedAttention {
       t = -math::log2e * 2.0f * s;
       e = __builtin_amdgcn_exp2f(t);
       d = e + 1.0f;
-      r = __builtin_amdgcn_rcp(d);
+      r = __builtin_amdgcn_rcpf(d);
       r = e*(-r)+r;//fmaf (e, -r, r);
       if (s < 4.997253418e-3f) r = a;
       union fipnr {float f; unsigned int i;};
