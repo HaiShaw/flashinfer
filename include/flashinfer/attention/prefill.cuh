@@ -1006,14 +1006,16 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
       for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv) {
         //vec_cast<DTypeQ, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
 //hipFIXED
-        if constexpr (std::is_same_v<DTypeQ, gpu_bfloat16>) {
-	  //fast but unsafe bfloat conversion... 	
-          for (size_t i = 0; i < 4; ++i)
-	    s_frag_f16[mma_q][mma_kv][i] = 
-		    *reinterpret_cast<DTypeQ*>(&(reinterpret_cast<uint16_t*>(&s_frag[mma_q][mma_kv][i])[1]));  
+        if constexpr (std::is_same_v<DTypeQ, half>) {
+          vec_cast<DTypeQ, float>::template cast<4>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
 	}
 	else {
-          vec_cast<DTypeQ, float>::template cast<4>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
+	  //fast but unsafe bfloat conversion...
+	  union f2bf { float f; __hip_bfloat16 bf[2]; } _f2bf;
+          for (size_t i = 0; i < 4; ++i) {
+	    _f2bf.f = s_frag[mma_q][mma_kv][i];
+	    s_frag_f16[mma_q][mma_kv][i] = _f2bf.bf[1];
+	  }
 	}
       }
     }
