@@ -2033,8 +2033,8 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
         kv_page_idx[i] = paged_kv.get_kv_page_idx(
             page_iter);
       }
-      cp_async::wait_group<1>();
-      block.sync();
+      //cp_async::wait_group<1>();
+      //block.sync();
 
       if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
         k_smem_inplace_apply_rotary<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV,
@@ -2068,7 +2068,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
       // compute m,d states in online softmax
       update_mdo_states<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(variant, s_frag, o_frag, m, d);
 
-      block.sync();
+      //block.sync();
       for (uint32_t i = 0;
            i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
         uint32_t page_iter, entry_idx;
@@ -2084,9 +2084,9 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
       page_produce_kv<false, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
           k_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
           kv_offset, chunk_size);
-      cp_async::commit_group();
-      cp_async::wait_group<1>();
-      block.sync();
+      //cp_async::commit_group();
+      //cp_async::wait_group<1>();
+      //block.sync();
 
       // compute sfm*v
       compute_sfm_v<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_kv, DTypeQ, DTypeKV>(
@@ -2095,13 +2095,13 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
           (lane_idx % 16) / 8,
           s_frag, o_frag, d);
 
-      block.sync();
+      //block.sync();
       page_produce_kv<true, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
           v_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
           kv_offset, chunk_size);
-      cp_async::commit_group();
+      //cp_async::commit_group();
     }
-    cp_async::wait_group<0>();
+    //cp_async::wait_group<0>();
     block.sync();
 
     // threadblock synchronization
