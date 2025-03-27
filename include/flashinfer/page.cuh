@@ -181,6 +181,20 @@ struct paged_kv_t {
     return k_data + get_elem_offset(__ldg(indices + page_iter), head_idx, entry_idx, feat_idx);
   }
 
+  __device__ __forceinline__ size_t get_kv_page_idx (IdType page_iter) const {
+    return __ldg(indices + page_iter);
+  }
+
+  __device__ __forceinline__ size_t protective_get_kv_offset(size_t page_idx, IdType page_iter, uint32_t head_idx,
+                                                             uint32_t entry_idx, uint32_t feat_idx,
+                                                             IdType last_indptr) const {
+    if (page_iter < last_indptr) {
+      return get_elem_offset(page_idx, head_idx, entry_idx, feat_idx);
+    } else {
+      return 0;
+    }
+  }
+
   __device__ __forceinline__ size_t protective_get_kv_offset(IdType page_iter, uint32_t head_idx,
                                                              uint32_t entry_idx, uint32_t feat_idx,
                                                              IdType last_indptr) const {

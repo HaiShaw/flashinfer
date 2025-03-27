@@ -1547,9 +1547,9 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void SinglePrefillWithKV
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 +
                      8 * (lane_idx / 16) + lane_idx % 8,
                  (lane_idx % 16) / 8),
-             v_smem_offset_r = v_smem.template get_permuted_offset<channel_size_128b_kv>(
-                 get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
-                 lane_idx / 16),
+             //v_smem_offset_r = v_smem.template get_permuted_offset<channel_size_128b_kv>(
+             //    get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
+             //    lane_idx / 16),
              kv_smem_offset_w = k_smem.template get_permuted_offset<channel_size_128b_kv>(
                  warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);
     produce_kv<SharedMemFillMode::kNoFill, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
@@ -1964,6 +1964,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
                        NUM_WARPS_KV * NUM_MMA_KV * sizeof(DTypeKV)) *
                           16 * head_dim);
     size_t kv_offset[NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q];
+    size_t kv_page_idx[NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q];
 
     uint32_t k_smem_offset_r = k_smem.template get_permuted_offset<channel_size_128b_kv>(
                  get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() * NUM_MMA_KV * 16 + lane_idx % 16,
@@ -2024,14 +2025,13 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
 #pragma unroll
       for (uint32_t i = 0;
            i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
-        uint32_t page_iter, entry_idx;
-        paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows +
-                                      lane_idx / kv_frag_cols +
-                                      kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
-                                  page_iter, entry_idx);
-        kv_offset[i] = paged_kv.protective_get_kv_offset(
-            page_iter, kv_head_idx, entry_idx,
-            (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(), last_indptr);
+        uint32_t page_iter = (packed_page_iter_base + warp_idx * kv_frag_rows + lane_idx / kv_frag_cols + kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i)/paged_kv.page_size;
+        //paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows +
+        //                              lane_idx / kv_frag_cols +
+        //                              kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
+        //                          page_iter, entry_idx);
+        kv_page_idx[i] = paged_kv.get_kv_page_idx(
+            page_iter);
       }
       cp_async::wait_group<1>();
       block.sync();
@@ -2069,6 +2069,18 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
       update_mdo_states<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(variant, s_frag, o_frag, m, d);
 
       block.sync();
+      for (uint32_t i = 0;
+           i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
+        uint32_t page_iter, entry_idx;
+        paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows +
+                                      lane_idx / kv_frag_cols +
+                                      kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
+                                  page_iter, entry_idx);
+        kv_offset[i] = paged_kv.protective_get_kv_offset(
+            kv_page_idx[i], page_iter, kv_head_idx, entry_idx,
+            (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(), last_indptr);
+      }
+
       page_produce_kv<false, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
           k_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
           kv_offset, chunk_size);
