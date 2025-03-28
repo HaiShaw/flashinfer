@@ -365,28 +365,34 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
     static_assert(NUM_MMA_KV * 4 % NUM_WARPS_Q == 0);
 //#pragma unroll
     //for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i) {
-    if (isLoad)
+    if (isLoad) {
+#pragma unroll
     for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i) {
 #pragma unroll
      for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_) {
       DType* gptr = produce_v ? paged_kv.v_data + kv_offset[i*UNRLkvq+i_] : paged_kv.k_data + kv_offset[i*UNRLkvq+i_];
+      if (kv_idx < kv_len) {
 #pragma unroll
-      for (uint32_t j = 0; j < UNRLz; ++j) {
+       for (uint32_t j = 0; j < UNRLz; ++j) {
         //smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
 //hipFIXED
         //smem.template load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
         //*smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
         const b128_t* gmem_ptr = reinterpret_cast<const b128_t*>(gptr);
-        bool predicate = kv_idx < kv_len;
-	pred_vals[i][i_][j] = predicate;
-        load_vals[i][i_][j] = make_uint4(0, 0, 0, 0);
-	if (predicate)
-          load_vals[i][i_][j] = *((uint4*)gmem_ptr);
+	pred_vals[i][i_][j] = true;
+        load_vals[i][i_][j] = *((uint4*)gmem_ptr);
         gptr += 8 * num_elems_per_128b<DType>();
+       }
+      } else {
+#pragma unroll
+       for (uint32_t j = 0; j < UNRLz; ++j) { 
+        pred_vals[i][i_][j] = false;  
+       }
       }
       kv_idx += num_warps * 4;
      }
-     return;
+    }
+    return;
     }
 //#pragma unroll
     if (!isLoad)
@@ -516,7 +522,7 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
 //      for (uint32_t j_ = 0; j_ < UNRLq; ++j_) {
 //#pragma unroll (NUM_MMA_D / 4)
 //        for (uint32_t mma_do = 0; mma_do < NUM_MMA_D / 4; ++mma_do) {
-#pragma unroll (UNRLq * (NUM_MMA_D / 4))
+#pragma unroll
         for (uint32_t mma_do_j = 0; mma_do_j < UNRLq * (NUM_MMA_D / 4); ++mma_do_j) {
 	  //uint32_t mma_do = mma_do_j % (NUM_MMA_D / 4);
 	  uint32_t j_ = mma_do_j % UNRLq;
@@ -541,13 +547,13 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
           qptr_vals[j_] += 8 * num_elems_per_128b<DTypeQ>();
 	}
       //}
-#pragma unroll UNRLq
+#pragma unroll
       for (uint32_t j_ = 0; j_ < UNRLq; ++j_) {
         //uint32_t q, r;
         //group_size.divmod(packed_offset + lane_idx / 8 + mma_q * 16 + (j*UNRLq+j_) * 4, q, r);
         //const uint32_t q_idx = q;
         //DTypeQ* q_ptr = q_ptr_base + q * q_stride_n + r * q_stride_h;
-#pragma unroll (NUM_MMA_D / 4)
+#pragma unroll 
         for (uint32_t mma_do = 0; mma_do < NUM_MMA_D / 4; ++mma_do) {
           // load q fragment from gmem to smem
           //q_smem->load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
@@ -1951,8 +1957,8 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
     constexpr uint32_t NUM_MMA_KVQ_UNRLD = NUM_MMA_KVQ_UNRL>1?NUM_MMA_KVQ_UNRL:1;
     constexpr uint32_t UNRLkvq = NUM_MMA_KVQ/NUM_MMA_KVQ_UNRLD;
     constexpr uint32_t UNRLz = (1 > NUM_MMA_D / (8 / sizeof(DTypeKV))) ? 1 : NUM_MMA_D / (8 / sizeof(DTypeKV));
-    uint4 load_vals[2][NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz];
-    bool  pred_vals[2][NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz];
+    uint4 load_vals[2][NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz] = { make_uint4(0, 0, 0, 0) };
+    bool  pred_vals[2][NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz] = {false};
 
 
 
@@ -2083,17 +2089,12 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
           page_iter, kv_head_idx, entry_idx,
           (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(), last_indptr);
     }
+    //load k from mem
     page_produce_kv<false, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
         k_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[0], pred_vals[0], true);
-/*    cp_async::commit_group();
-    page_produce_kv<false, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        k_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[0], pred_vals[0], false);
-    cp_async::commit_group();*/
+    //load v from mem
     page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
         v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[1], pred_vals[1], true);
-/*    page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[1], pred_vals[1], false);
-    cp_async::commit_group();*/
 
     const uint32_t num_iterations = ceil_div(
         (MASK_MODE == MaskMode::kCausal
@@ -2145,11 +2146,10 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
         block.sync();
       }
 
-
+      //store k to lds
       page_produce_kv<false, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
         k_smem, &kv_smem_offset_w, paged_kv, iter, kv_offset, chunk_size, load_vals[0], pred_vals[0], false);
-    page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        v_smem, &kv_smem_offset_w, paged_kv, iter, kv_offset, chunk_size, load_vals[1], pred_vals[1], false);
+
  
       // compute attention score
       __syncthreads();
@@ -2161,6 +2161,10 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
           chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) *
                             NUM_MMA_KV * 16,
           qo_len, kv_len, group_size, s_frag);
+
+      //store v to lds
+      page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
+        v_smem, &kv_smem_offset_w, paged_kv, iter, kv_offset, chunk_size, load_vals[1], pred_vals[1], false);
 
       // apply mask
       if (MASK_MODE == MaskMode::kCustom || (iter >= mask_iteration || iter < window_iteration)) {
@@ -2175,6 +2179,8 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
       update_mdo_states<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(variant, s_frag, o_frag, m, d);
 
       block.sync();
+      
+      //load next k from mem
       page_produce_kv<false, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
           k_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
           kv_offset, chunk_size, load_vals[0], pred_vals[0], true);
@@ -2190,17 +2196,11 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
           s_frag, o_frag, d);
 
       //block.sync();
-/*      page_produce_kv<false, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-          k_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
-          kv_offset, chunk_size, load_vals[0], pred_vals[0], false);*/
+
+      //load next v from mem
       page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
           v_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
           kv_offset, chunk_size, load_vals[1], pred_vals[1], true);
-
-      //TODO: where should this store go?
-/*      page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-          v_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
-          kv_offset, chunk_size, load_vals[1], pred_vals[1], false);*/
 
      //cp_async::commit_group();
     }
