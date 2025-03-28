@@ -339,14 +339,14 @@ __device__ __forceinline__ void produce_kv(smem_t<swizzle_mode> smem, uint32_t* 
 }
 
 template <bool produce_v, uint32_t NUM_MMA_KVQ_UNRLD, uint32_t UNRLkvq, uint32_t UNRLz, uint32_t NUM_WARPS_Q, uint32_t NUM_WARPS_KV, uint32_t NUM_MMA_D,
-          uint32_t NUM_MMA_KV, SwizzleMode swizzle_mode, typename DType, typename IdType>
+          uint32_t NUM_MMA_KV, SwizzleMode swizzle_mode, typename DType, typename IdType, bool isLoad>
 __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint32_t* smem_offset,
                                                 const paged_kv_t<DType, IdType>& paged_kv,
                                                 const uint32_t kv_idx_base, const size_t* kv_offset,
                                                 const uint32_t kv_len, 
-						uint4 load_vals[NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz], 
-						bool  pred_vals[NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz],
-						bool isLoad=false) {
+                                                uint4 load_vals[NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz],
+                                                bool  pred_vals[NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz],
+                                                std::bool_constant<isLoad> = {}) {
 
   if (CUDA_WARP_SIZE <= threadIdx.x) {
     return;
@@ -365,7 +365,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
     static_assert(NUM_MMA_KV * 4 % NUM_WARPS_Q == 0);
 //#pragma unroll
     //for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i) {
-    if (isLoad) {
+    if constexpr (isLoad) {
 #pragma unroll
     for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i) {
 #pragma unroll
@@ -395,7 +395,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
     return;
     }
 //#pragma unroll
-    if (!isLoad)
+    if constexpr(!isLoad)
     for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i) {
 #pragma unroll
      for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_) {
@@ -2047,10 +2047,10 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
 
     //load k from mem
     page_produce_kv<false, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        k_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[0], pred_vals[0], true);
+        k_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[0], pred_vals[0], std::true_type{});
     //load v from mem
     page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[1], pred_vals[1], true);
+        v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[1], pred_vals[1], std::true_type{});
 
     //cp_async::commit_group();
 
@@ -2104,7 +2104,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
 
       //store k to lds
       page_produce_kv<false, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        k_smem, &kv_smem_offset_w, paged_kv, iter, kv_offset, chunk_size, load_vals[0], pred_vals[0], false);
+        k_smem, &kv_smem_offset_w, paged_kv, iter, kv_offset, chunk_size, load_vals[0], pred_vals[0], std::false_type{});
 
       // compute attention score
       __syncthreads();
@@ -2124,7 +2124,7 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
       //load next k from mem
       page_produce_kv<false, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
           k_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
-          kv_offset, chunk_size, load_vals[0], pred_vals[0], true);
+          kv_offset, chunk_size, load_vals[0], pred_vals[0], std::true_type{});
 
       compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ,
                  DTypeKV>(&qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
@@ -2149,14 +2149,14 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
 
       //store v to lds
       page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        v_smem, &kv_smem_offset_w, paged_kv, iter, kv_offset, chunk_size, load_vals[1], pred_vals[1], false);
+        v_smem, &kv_smem_offset_w, paged_kv, iter, kv_offset, chunk_size, load_vals[1], pred_vals[1], std::false_type{});
  
       block.sync();
 
       //load next v from mem
       page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
           v_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
-          kv_offset, chunk_size, load_vals[1], pred_vals[1], true);
+          kv_offset, chunk_size, load_vals[1], pred_vals[1], std::true_type{});
 
       // compute sfm*v
       compute_sfm_v<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_kv, DTypeQ, DTypeKV>(
