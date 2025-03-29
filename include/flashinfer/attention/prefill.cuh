@@ -737,9 +737,11 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
       q_smem->ldmatrix_m8n8x4(*q_smem_offset_r, a_frag[mma_q]);
 #else
       // thread 0 read first 4 elements, thread 16 read last 4 elements, etc...
-      auto* values = reinterpret_cast<unsigned char*>(q_smem->base + *q_smem_offset_r) \
-         + sizeof(ab_frag_type) * (real_lane_idx / 16 % 2);
-      memcpy(a_frag + mma_q, values, sizeof(ab_frag_type));
+      ab_frag_type* adrs = reinterpret_cast<__shared__ ab_frag_type*>(q_smem->base + *q_smem_offset_r);
+      a_frag[mma_q] = adrs[real_lane_idx / 16 % 2];
+
+
+
 #endif // disable MMA on ROCm platform
       *q_smem_offset_r =
           q_smem->template advance_offset_by_row<16, channel_size_128b_q>(*q_smem_offset_r);
@@ -776,9 +778,9 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>* q_smem,
         k_smem->ldmatrix_m8n8x4(*k_smem_offset_r, b_frag);
 #else
         // thread 0 read first 4 elements, thread 16 read last 4 elements, etc...
-        auto* values = reinterpret_cast<unsigned char*>(k_smem->base + *k_smem_offset_r) \
-          + sizeof(ab_frag_type) * (real_lane_idx / 16 % 2);
-        memcpy(&b_frag, values, sizeof(ab_frag_type));
+        ab_frag_type* adrs = reinterpret_cast<__shared__ ab_frag_type*>(k_smem->base + *k_smem_offset_r);
+        b_frag = adrs[real_lane_idx / 16 % 2];
+
 #endif // disable MMA on ROCm platform
       }
       *k_smem_offset_r =
@@ -2031,10 +2033,10 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
           (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(), last_indptr);
     }
 
-    //load k from mem
+    //load first k from mem
     page_produce_kv<false, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
         k_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[0], std::true_type{});
-    //load v from mem
+    //load first v from mem
     page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
         v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[1], std::true_type{});
 
@@ -2062,21 +2064,18 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
              : chunk_size) /
         (16 * NUM_WARPS_KV * NUM_MMA_KV);
 
+    //load first kv_page_idx from mem
+#pragma unroll
+    for (uint32_t i = 0;
+           i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
+        uint32_t page_iter = (packed_page_iter_base + (16 * NUM_WARPS_KV * NUM_MMA_KV) + warp_idx * kv_frag_rows + lane_idx / kv_frag_cols + kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i)/paged_kv.page_size;
+        kv_page_idx[i] = paged_kv.get_kv_page_idx(
+            page_iter);
+    }
+
 #pragma unroll 1
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
       packed_page_iter_base += 16 * NUM_WARPS_KV * NUM_MMA_KV;
-#pragma unroll
-      for (uint32_t i = 0;
-           i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
-        uint32_t page_iter = (packed_page_iter_base + warp_idx * kv_frag_rows + lane_idx / kv_frag_cols + kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i)/paged_kv.page_size;
-        //paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows +
-        //                              lane_idx / kv_frag_cols +
-        //                              kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
-        //                          page_iter, entry_idx);
-        kv_page_idx[i] = paged_kv.get_kv_page_idx(
-            page_iter);
-      }
-
       if constexpr (POS_ENCODING_MODE == PosEncodingMode::kRoPELlama) {
         k_smem_inplace_apply_rotary<NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV,
                                     swizzle_mode_kv, DTypeKV>(
@@ -2102,13 +2101,23 @@ __launch_bounds__(NUM_WARPS_Q* NUM_WARPS_KV* WARP_SIZE) void BatchPrefillWithPag
             (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(), last_indptr);
       }
 
+      //load next kv_page_idx from mem
+#pragma unroll
+      for (uint32_t i = 0;
+           i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i) {
+        uint32_t page_iter = (packed_page_iter_base + (16 * NUM_WARPS_KV * NUM_MMA_KV) + warp_idx * kv_frag_rows + lane_idx / kv_frag_cols + kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i)/paged_kv.page_size;
+        kv_page_idx[i] = paged_kv.get_kv_page_idx(
+            page_iter);
+      }
+
+      // compute attention score
+      __syncthreads();
+
       //load next k from mem
       page_produce_kv<false, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
           k_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV,
           kv_offset, chunk_size, load_vals[0], std::true_type{});
 
-      // compute attention score
-      __syncthreads();
       compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ,
                  DTypeKV>(&qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
 
