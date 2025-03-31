@@ -45,6 +45,15 @@ namespace flashinfer {
 	    return float(q);
   }
 
+  template <typename T>
+  __device__ __forceinline__ T float2T_unsafe(float q) {
+    static_assert(std::is_same_v<T, __hip_bfloat16>);
+
+	  union f2bf { float f; __hip_bfloat16 bf[2]; } _f2bf;
+    _f2bf.f = q;
+    return _f2bf.bf[1];
+  }
+
 // Query Transform function that multiplies the query matrix by sm_scale
 template <typename ParamsT_>
 struct StandardAttention {
