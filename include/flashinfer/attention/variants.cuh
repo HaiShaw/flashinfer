@@ -285,7 +285,11 @@ struct ComposedAttention {
   template <typename T>
   __device__ __forceinline__ T QueryTransform(const ParamsT& params, T q) {
     if constexpr (use_logits_soft_cap) {
-      return float2T<T>(T2float(q) * params.sm_scale * math::ptx_rcp(params.logits_soft_cap));
+      if constexpr (std::is_same_v<T, gpu_bfloat16>) {
+        return float2T_unsafe<T>(T2float(q) * params.sm_scale * math::ptx_rcp(params.logits_soft_cap));
+      } else {
+        return float2T<T>(T2float(q) * params.sm_scale * math::ptx_rcp(params.logits_soft_cap));
+      }
     } else {
       return float2T<T>(T2float(q) * params.sm_scale * math::log2e);
     }
