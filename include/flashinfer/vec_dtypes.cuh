@@ -612,13 +612,20 @@ template <>
 struct vec_cast<gpu_bfloat16, float> {
   template <size_t vec_size>
   FLASHINFER_INLINE static void cast(gpu_bfloat16* dst, const float* src) {
-    if constexpr (vec_size == 1) {
+    /*if constexpr (vec_size == 1) {
       dst[0] = gpu_bfloat16(src[0]);
     } else {
 #pragma unroll
       for (size_t i = 0; i < vec_size / 2; ++i) {
         ((gpu_bfloat162*)dst)[i] = __float22bfloat162_rn(((float2*)src)[i]);
       }
+    }*/
+    //fast but unsafe bfloat conversion...
+    union f2bf { float f; __hip_bfloat16 bf[2]; } _f2bf;
+#pragma unroll
+    for (size_t i = 0; i < vec_size; ++i) {
+        _f2bf.f = src[i];
+        dst[i] = _f2bf.bf[1];
     }
   }
 };
