@@ -54,6 +54,15 @@ namespace flashinfer {
     return _f2bf.bf[1];
   }
 
+  template <typename T>
+  __device__ __forceinline__ float T2float_unsafe(T q) {
+    static_assert(std::is_same_v<T, __hip_bfloat16>);
+
+	  union bf2f { float f; __hip_bfloat16 bf[2]; } _bf2f = { .f = 0 } ;
+    _bf2f.bf[1] = q;
+    return _bf2f.f;
+  }
+
 // Query Transform function that multiplies the query matrix by sm_scale
 template <typename ParamsT_>
 struct StandardAttention {
@@ -285,7 +294,12 @@ struct ComposedAttention {
   template <typename T>
   __device__ __forceinline__ T QueryTransform(const ParamsT& params, T q) {
     if constexpr (use_logits_soft_cap) {
-      return float2T<T>(T2float(q) * params.sm_scale * math::ptx_rcp(params.logits_soft_cap));
+      if constexpr(std::is_same<T, __hip_bfloat16>::value) {
+        //return float2T_unsafe<T>(T2float_unsafe(q) * params.sm_scale * math::ptx_rcp(params.logits_soft_cap));
+        return float2T_unsafe<T>(T2float_unsafe(q) * params.sm_scale * __builtin_amdgcn_rcpf(params.logits_soft_cap));
+      } else {
+        return float2T<T>(T2float(q) * params.sm_scale * math::ptx_rcp(params.logits_soft_cap));
+      }
     } else {
       return float2T<T>(T2float(q) * params.sm_scale * math::log2e);
     }

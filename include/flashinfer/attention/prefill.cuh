@@ -495,6 +495,7 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
     uint32_t q_smem_offset_w = q_smem->template get_permuted_offset<channel_size_128b_q>(
         warp_idx_x * NUM_MMA_Q * 16 + lane_idx / 8, lane_idx % 8);
 
+    uint4 load_vals[NUM_MMA_Q][4][NUM_MMA_D/4] = { make_uint4(0, 0, 0, 0) };
 #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
 #pragma unroll
@@ -502,16 +503,33 @@ __device__ __forceinline__ void load_q_global_smem(uint32_t packed_offset,
         uint32_t q, r;
         group_size.divmod(packed_offset + lane_idx / 8 + mma_q * 16 + j * 4, q, r);
         const uint32_t q_idx = q;
+	if (q_idx >= qo_upper_bound) continue;
         DTypeQ* q_ptr = q_ptr_base + q * q_stride_n + r * q_stride_h;
 #pragma unroll
         for (uint32_t mma_do = 0; mma_do < NUM_MMA_D / 4; ++mma_do) {
           // load q fragment from gmem to smem
-          //q_smem->load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
-//hipFIXED
-          q_smem->template load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
-                                                              q_idx < qo_upper_bound);
-          q_smem_offset_w = q_smem->template advance_offset_by_column<8>(q_smem_offset_w, mma_do);
+          //q_smem->template load_128b_async<SharedMemFillMode::kNoFill>(q_smem_offset_w, q_ptr,
+          //                                                    q_idx < qo_upper_bound);
+          const b128_t* qmem_ptr = reinterpret_cast<const b128_t*>(q_ptr);
+          load_vals[mma_q][j][mma_do] = *((uint4*)qmem_ptr);
+
           q_ptr += 8 * num_elems_per_128b<DTypeQ>();
+        }
+      }
+    }
+#pragma unroll
+    for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q) {
+#pragma unroll
+      for (uint32_t j = 0; j < 4; ++j) {
+        uint32_t q, r;
+        group_size.divmod(packed_offset + lane_idx / 8 + mma_q * 16 + j * 4, q, r);
+        const uint32_t q_idx = q;
+	if (q_idx >= qo_upper_bound) continue;
+#pragma unroll
+        for (uint32_t mma_do = 0; mma_do < NUM_MMA_D / 4; ++mma_do) {
+          b128_t* smem_ptr = q_smem->base + q_smem_offset_w;
+          *((uint4*)smem_ptr) = load_vals[mma_q][j][mma_do];
+          q_smem_offset_w = q_smem->template advance_offset_by_column<8>(q_smem_offset_w, mma_do);
         }
         q_smem_offset_w =
             q_smem->template advance_offset_by_row<4, channel_size_128b_q>(q_smem_offset_w) -
