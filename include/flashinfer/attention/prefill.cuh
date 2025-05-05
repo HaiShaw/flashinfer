@@ -1132,13 +1132,13 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant,
 #if 0  // disable MMA on ROCm platform
         v_smem->ldmatrix_m8n8x4_trans(*v_smem_offset_r, b_frag);
 #else
-        DTypeKV data[4];
+        union bld { ab_frag_type b;  DTypeKV data[4]; } _bld;
         static_assert(sizeof(DTypeKV) == 2);
         for (uint32_t elem = 0; elem < 4; ++elem) {
           uint32_t offset = v_smem->template get_permuted_offset<channel_size_128b_kv>(i + elem, j);
-          data[elem] = reinterpret_cast<DTypeKV*>(v_smem->base + offset)[real_lane_idx % 8];
+          _bld.data[elem] = reinterpret_cast<DTypeKV*>(v_smem->base + offset)[real_lane_idx % 8];
         }
-        memcpy(&b_frag, data, sizeof(ab_frag_type));
+        b_frag = _bld.b;
 #endif // disable MMA on ROCm platform
       }
 #pragma unroll
