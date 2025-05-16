@@ -790,6 +790,17 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>  *q_smem,
     using ab_frag_type = typename mfma_m16n16k16_f32<DTypeQ>::ab_fragment_type;
     using c_frag_type = typename mfma_m16n16k16_f32<DTypeQ>::c_fragment_type;
 
+    for ( int i = 0; i < NUM_MMA_Q; ++i)
+    {
+        for( int j = 0; j <  NUM_MMA_KV; ++j)
+        {
+            for( int k = 0; k <  4; ++k)
+            {
+                s_frag[i][j][k] = 0;
+            }
+        }
+    }
+
     ab_frag_type a_frag[NUM_MMA_Q];
     ab_frag_type b_frag;
 
@@ -810,7 +821,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>  *q_smem,
         *q_smem_offset_r = q_smem->template advance_offset_by_column<2>(*q_smem_offset_r, mma_d) -
                            NUM_MMA_Q * 16 * channel_size_128b_q;
 
-#pragma unroll
+        #pragma unroll
         for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv)
         {
             if constexpr (sizeof(DTypeKV) == 1)
@@ -822,8 +833,12 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>  *q_smem,
                 // vec_cast<DTypeQ, DTypeKV>::cast<8>((DTypeQ*)b_frag, (DTypeKV*)b_frag_f8);
                 // hipFIXED
                 if constexpr (std::is_same<DTypeQ, __half>::value)
+                {
                     if constexpr (std::is_same<DTypeKV, __half>::value)
+                    {
                         vec_cast<__half, __half>::cast<8>((DTypeQ *)b_frag, (DTypeKV *)b_frag_f8);
+                    }
+                }
             }
             else
             {
@@ -838,17 +853,9 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q>  *q_smem,
             {
                 if constexpr (std::is_same_v<DTypeQKAccum, float>)
                 {
-                    if (mma_d == 0)
-                    {
-                        *(c_frag_type *)s_frag[mma_q][mma_kv] =
-                            mfma_m16n16k16_f32<DTypeQ>::run(b_frag, a_frag[mma_q], c_frag_type{});
 
-                    }
-                    else
-                    {
                         *(c_frag_type *)s_frag[mma_q][mma_kv] = mfma_m16n16k16_f32<DTypeQ>::run(
                             b_frag, a_frag[mma_q], *(c_frag_type *)s_frag[mma_q][mma_kv]);
-                    }
                 }
             }
         }
