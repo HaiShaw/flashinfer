@@ -373,8 +373,22 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
     constexpr uint32_t head_dim             = NUM_MMA_D * 16;
     constexpr uint32_t num_warps            = NUM_WARPS_Q * NUM_WARPS_KV;
     constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DType>();
-    const uint32_t warp_idx                 = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(),
+    const uint32_t warp_idx                 = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>();
     const uint32_t lane_idx                 = __lane_id();
+
+    // looping lambda expression that takes a function or lambda
+    const auto loopExecOuter = [&](auto&& innerOp){
+        #pragma unroll
+        for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
+        {
+            #pragma unroll
+            for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
+            {
+                innerOp(i, i_);
+                kv_idx += num_warps * 4;
+            }
+        }
+    };
 
     if constexpr (swizzle_mode == SwizzleMode::k128B)
     {
@@ -384,8 +398,11 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
         static_assert(NUM_MMA_KV * 4 % NUM_WARPS_Q == 0);
         // #pragma unroll
         // for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i) {
+        DType *gptrBase = produce_v ? paged_kv.v_data : paged_kv.k_data;
 
-        auto loopExeckv_idxSmall = [&](){
+        const auto loopExeckv_idxSmall = [&](int i, int i_){
+
+            DType* gptr = gptrBase +  kv_offset[i * UNRLkvq + i_];
             #pragma unroll
             for (uint32_t j = 0; j < UNRLz; ++j)
             {
@@ -401,7 +418,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
             }
         };
 
-        auto loopExecKV_idxLarge = [&](){
+        const auto loopExecKV_idxLarge = [&](int i, int i_){
             #pragma unroll
             for (uint32_t j = 0; j < UNRLz; ++j)
             {
@@ -409,23 +426,8 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
             }
         };
 
-        auto loopExecOuter = [&](std::function<void(void)>& innerOp){
-            #pragma unroll
-            for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
-            {
-                #pragma unroll
-                for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
-                {
-                    innerOp();
-                    kv_idx += num_warps * 4;
-                }
-            }
-        };
-
         if constexpr (isLoad)
         {
-            DType *gptr = produce_v ? paged_kv.v_data + kv_offset[i * UNRLkvq + i_] :
-                                      paged_kv.k_data + kv_offset[i * UNRLkvq + i_];
             if (kv_idx < kv_len) // NOTE: Lucneves: bad, hoist to outside of loop, even if that means duplicating the loop
             {
                 loopExecOuter(loopExeckv_idxSmall);
@@ -445,11 +447,8 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
         //#pragma unroll
         if constexpr (!isLoad)
         {
-            for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
-            {
-                #pragma unroll
-                for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
-                {
+
+            const auto innerLoopOp = [&](int i, int i_){
                     #pragma unroll
                     for (uint32_t j = 0; j < UNRLz; ++j)
                     {
@@ -460,8 +459,10 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                     *smem_offset =
                         smem.template advance_offset_by_row<num_warps * 4, channel_size_128b_kv>(*smem_offset) -
                         sizeof(DType) * NUM_MMA_D;
-                }
-            }
+            };
+
+            loopExecOuter(innerLoopOp);
+
         }
         *smem_offset -= NUM_WARPS_KV * NUM_MMA_KV * 16 * channel_size_128b_kv;
     }
