@@ -362,7 +362,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                                                 uint4 load_vals[NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz],
                                                 std::bool_constant<isLoad> = {})
 {
-    if (CUDA_WARP_SIZE <= threadIdx.x)
+    if (CUDA_WARP_SIZE <= threadIdx.x) // is this actually needed?
     {
         return;
     }
@@ -373,7 +373,8 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
     constexpr uint32_t head_dim             = NUM_MMA_D * 16;
     constexpr uint32_t num_warps            = NUM_WARPS_Q * NUM_WARPS_KV;
     constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DType>();
-    const uint32_t warp_idx                 = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(), lane_idx = threadIdx.x;
+    const uint32_t warp_idx                 = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(),
+    const uint32_t lane_idx                 = __lane_id();
 
     if constexpr (swizzle_mode == SwizzleMode::k128B)
     {
@@ -383,56 +384,73 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
         static_assert(NUM_MMA_KV * 4 % NUM_WARPS_Q == 0);
         // #pragma unroll
         // for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i) {
-        if constexpr (isLoad)
-        {
-#pragma unroll
+
+        auto loopExeckv_idxSmall = [&](){
+            #pragma unroll
+            for (uint32_t j = 0; j < UNRLz; ++j)
+            {
+                // smem.load_128b_async<fill_mode>(*smem_offset,
+                // gptr, kv_idx < kv_len); hipFIXED smem.template
+                // load_128b_async<fill_mode>(*smem_offset, gptr,
+                // kv_idx < kv_len);
+                //*smem_offset = smem.template
+                // advance_offset_by_column<8>(*smem_offset, j);
+                const b128_t *gmem_ptr = reinterpret_cast<const b128_t *>(gptr);
+                load_vals[i][i_][j] = *((uint4 *)gmem_ptr);
+                gptr += 8 * num_elems_per_128b<DType>();
+            }
+        };
+
+        auto loopExecKV_idxLarge = [&](){
+            #pragma unroll
+            for (uint32_t j = 0; j < UNRLz; ++j)
+            {
+                load_vals[i][i_][j] = make_uint4(0, 0, 0, 0);
+            }
+        };
+
+        auto loopExecOuter = [&](std::function<void(void)>& innerOp){
+            #pragma unroll
             for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
             {
-#pragma unroll
+                #pragma unroll
                 for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
                 {
-                    DType *gptr = produce_v ? paged_kv.v_data + kv_offset[i * UNRLkvq + i_]
-                                            : paged_kv.k_data + kv_offset[i * UNRLkvq + i_];
-                    if (kv_idx < kv_len) // NOTE: Lucneves: bad, hoist to outside of loop, even if that means duplicating the loop
-                    {
-#pragma unroll
-                        for (uint32_t j = 0; j < UNRLz; ++j)
-                        {
-                            // smem.load_128b_async<fill_mode>(*smem_offset,
-                            // gptr, kv_idx < kv_len); hipFIXED smem.template
-                            // load_128b_async<fill_mode>(*smem_offset, gptr,
-                            // kv_idx < kv_len);
-                            //*smem_offset = smem.template
-                            // advance_offset_by_column<8>(*smem_offset, j);
-                            const b128_t *gmem_ptr = reinterpret_cast<const b128_t *>(gptr);
-                            load_vals[i][i_][j] = *((uint4 *)gmem_ptr);
-                            gptr += 8 * num_elems_per_128b<DType>();
-                        }
-                    }
-                    else
-                    {
-                        if constexpr (fill_mode == SharedMemFillMode::kFillZero)
-                        {
-#pragma unroll
-                            for (uint32_t j = 0; j < UNRLz; ++j)
-                            {
-                                load_vals[i][i_][j] = make_uint4(0, 0, 0, 0);
-                            }
-                        }
-                    }
+                    innerOp();
                     kv_idx += num_warps * 4;
                 }
             }
+        };
+
+        if constexpr (isLoad)
+        {
+            DType *gptr = produce_v ? paged_kv.v_data + kv_offset[i * UNRLkvq + i_] :
+                                      paged_kv.k_data + kv_offset[i * UNRLkvq + i_];
+            if (kv_idx < kv_len) // NOTE: Lucneves: bad, hoist to outside of loop, even if that means duplicating the loop
+            {
+                loopExecOuter(loopExeckv_idxSmall);
+            }
+            else
+            {
+                if constexpr (fill_mode == SharedMemFillMode::kFillZero)
+                {
+                    loopExecOuter(loopExecKV_idxLarge);
+                }
+
+            }
+
             return;
         }
+
         //#pragma unroll
         if constexpr (!isLoad)
+        {
             for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
             {
-#pragma unroll
+                #pragma unroll
                 for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
                 {
-#pragma unroll
+                    #pragma unroll
                     for (uint32_t j = 0; j < UNRLz; ++j)
                     {
                         b128_t *smem_ptr = smem.base + *smem_offset;
@@ -444,6 +462,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                         sizeof(DType) * NUM_MMA_D;
                 }
             }
+        }
         *smem_offset -= NUM_WARPS_KV * NUM_MMA_KV * 16 * channel_size_128b_kv;
     }
     else
@@ -2158,10 +2177,12 @@ __global__ __launch_bounds__(NUM_WARPS_Q *NUM_WARPS_KV *WARP_SIZE) void BatchPre
             uint32_t page_iter;
             uint32_t entry_idx;
 
+            // divmod is also very very branchy
             paged_kv.page_size.divmod(packed_page_iter_base + warp_idx * kv_frag_rows + lane_idx / kv_frag_cols +
                                           kv_frag_rows * NUM_WARPS_Q * NUM_WARPS_KV * i,
                                       page_iter, entry_idx);
 
+            // this is bad. super branchy
             kv_offset[i] = paged_kv.protective_get_kv_offset(page_iter, kv_head_idx, entry_idx,
                                                              (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(),
                                                              last_indptr);
