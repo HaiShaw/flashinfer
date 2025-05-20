@@ -1006,10 +1006,10 @@ __device__ __forceinline__ void k_smem_inplace_apply_rotary(const uint32_t kv_id
 }
 
 template <uint32_t NUM_MMA_Q, uint32_t NUM_MMA_D, uint32_t NUM_MMA_KV, SwizzleMode swizzle_mode_q,
-          SwizzleMode swizzle_mode_kv, typename DTypeQ, typename DTypeKV, typename DTypeQKAccum, typename MFMADTypeQ>
+          SwizzleMode swizzle_mode_kv, typename DTypeQ, typename DTypeKV, typename MFMADTypeQ>
 __device__ __forceinline__ void produce_q(smem_t<swizzle_mode_q> *q_smem, uint32_t *q_smem_offset_r,
                                           smem_t<swizzle_mode_kv> *k_smem, uint32_t *k_smem_offset_r,
-                                          DTypeQKAccum (*s_frag)[NUM_MMA_KV][4], MFMADTypeQ (*a_frag)[NUM_MMA_Q][4])
+                                          MFMADTypeQ (*a_frag)[NUM_MMA_Q][4])
 {
     constexpr uint32_t head_dim = NUM_MMA_D * 16;
     constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
@@ -2562,7 +2562,7 @@ __global__
         using ab_frag_type = typename mfma_m16n16k16_f32<DTypeQ>::ab_fragment_type;
         B32_t a_frag[NUM_MMA_D][NUM_MMA_Q][4];
         produce_q<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ, DTypeKV>(
-            &qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag, a_frag);
+            &qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, a_frag);
         __syncthreads();
 #endif
 
