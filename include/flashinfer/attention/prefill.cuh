@@ -1299,12 +1299,13 @@ __device__ __forceinline__ void logits_mask(const typename AttentionVariant::Par
     {
         group_size.divmod(qo_packed_idx_base + mma_q * 16 + real_lane_idx % 16, q[mma_q], r[mma_q]);
     }
-
+    #pragma unroll
     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q)
     {
+        #pragma unroll
         for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv)
         {
-
+            #pragma unroll
             for (uint32_t reg_id = 0; reg_id < 4; ++reg_id)
             {
                 const uint32_t q_idx = q[mma_q], kv_idx = kv_idx_base + mma_kv * 16 + (real_lane_idx / 16) * 4 + reg_id;
@@ -2613,6 +2614,7 @@ __global__
         }
 #endif
 
+#pragma unroll 1
         for (uint32_t iter = 0; iter < num_iterations; ++iter)
         {
             packed_page_iter_base += 16 * NUM_WARPS_KV * NUM_MMA_KV;
