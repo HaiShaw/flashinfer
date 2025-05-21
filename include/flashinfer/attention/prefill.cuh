@@ -2419,7 +2419,7 @@ __global__
         constexpr uint32_t NUM_MMA_KVQ_UNRLD = NUM_MMA_KVQ_UNRL > 1 ? NUM_MMA_KVQ_UNRL : 1;
         constexpr uint32_t UNRLkvq = NUM_MMA_KVQ / NUM_MMA_KVQ_UNRLD;
         constexpr uint32_t UNRLz = (1 > NUM_MMA_D / (8 / sizeof(DTypeKV))) ? 1 : NUM_MMA_D / (8 / sizeof(DTypeKV));
-        uint4 load_vals[1][NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz] = {make_uint4(0, 0, 0, 0)};
+        uint4 load_vals[2][NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz] = {make_uint4(0, 0, 0, 0)};
 #endif
 
         static_assert(sizeof(DTypeQ) == 2);
@@ -2581,7 +2581,7 @@ __global__
         k_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[0], std::true_type{});
     // load first v from mem
     page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-        v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[0], std::true_type{});
+        v_smem, &kv_smem_offset_w, paged_kv, 0, kv_offset, chunk_size, load_vals[1], std::true_type{});
 #endif
         // cp_async::commit_group();
 
@@ -2741,12 +2741,12 @@ __global__
 #else
         // store v to lds
         page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
-            v_smem, &kv_smem_offset_w, paged_kv, iter, kv_offset, chunk_size, load_vals[0], std::false_type{});
+            v_smem, &kv_smem_offset_w, paged_kv, iter, kv_offset, chunk_size, load_vals[1], std::false_type{});
 
         // load next v from mem
         page_produce_kv<true, NUM_MMA_KVQ_UNRLD, UNRLkvq, UNRLz, NUM_WARPS_Q, NUM_WARPS_KV, NUM_MMA_D, NUM_MMA_KV>(
             v_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV, kv_offset, chunk_size,
-            load_vals[0], std::true_type{});
+            load_vals[1], std::true_type{});
 #endif
 
             cp_async::commit_group();
