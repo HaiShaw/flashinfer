@@ -391,7 +391,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
         // printf("\n-----%d,%d------\n", UNRLkvq, NUM_MMA_KVQ_UNRLD);
 
         DType * gptr_base = produce_v ? paged_kv.v_data : paged_kv.k_data;
-        // TODO gptr_base can be a buffer reasource from here
+        // TODO gptr_base can be a buffer resource from here
 
         #pragma unroll
         for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
@@ -495,32 +495,23 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
 
         DType *gptrBase = produce_v ? paged_kv.v_data : paged_kv.k_data;
 
-        bool inbounds = kv_idx < kv_len;
-        if(inbounds)
+        #pragma unroll
+        for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i)
         {
-          #pragma unroll
-          for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i)
+          DType *gptr = gptrBase + kv_offset[i];
+          bool inbounds = kv_idx < kv_len;
+          if(inbounds)
           {
-            DType *gptr = gptrBase + kv_offset[i];
-
+            #pragma unroll
             for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j)
             {
                 smem.template load_128b_async(*smem_offset, gptr);
                 *smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
                 gptr += 8 * num_elems_per_128b<DType>();
             }
-              kv_idx += num_warps * 4;
-              *smem_offset = smem.template advance_offset_by_row<num_warps * 4, channel_size_128b_kv>(*smem_offset) -
-                            sizeof(DType) * NUM_MMA_D;
           }
-        }
-        else
-        {
-          #pragma unroll
-          for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i)
+          else
           {
-            DType *gptr = gptrBase + kv_offset[i];
-
             #pragma unroll 1
             for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j)
             {
@@ -533,12 +524,11 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                 *smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
                 gptr += 8 * num_elems_per_128b<DType>();
             }
-              kv_idx += num_warps * 4;
-              *smem_offset = smem.template advance_offset_by_row<num_warps * 4, channel_size_128b_kv>(*smem_offset) -
-                            sizeof(DType) * NUM_MMA_D;
           }
+            kv_idx += num_warps * 4;
+            *smem_offset = smem.template advance_offset_by_row<num_warps * 4, channel_size_128b_kv>(*smem_offset) -
+                          sizeof(DType) * NUM_MMA_D;
         }
-
         *smem_offset -= NUM_WARPS_KV * NUM_MMA_KV * 16 * channel_size_128b_kv;
     }
     else
