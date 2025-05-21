@@ -393,36 +393,30 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
         constexpr uint32_t UNRLkvq           = NUM_MMA_KVQ / NUM_MMA_KVQ_UNRLD;
         // printf("\n-----%d,%d------\n", UNRLkvq, NUM_MMA_KVQ_UNRLD);
 
-        DType * gptr_base = produce_v ? paged_kv.v_data : paged_kv.k_data;
-        // TODO gptr_base can be a buffer resource from here
-        // create CK buffer resource
+        uint16_t * gptr_base = reinterpret_cast<uint16_t*>(produce_v ? paged_kv.v_data : paged_kv.k_data);
 
         #pragma unroll
         for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
         {
-            uint4 load_vals[UNRLkvq][NUM_MMA_D / (8 / sizeof(DType))];
+            ck_tile::uint16x8_t load_vals[UNRLkvq][NUM_MMA_D / (8 / sizeof(DType))];
             bool pred_vals[UNRLkvq][NUM_MMA_D / (8 / sizeof(DType))];
             #pragma unroll
             for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
             {
-                DType *gptr = gptr_base + kv_offset[i * UNRLkvq + i_];
+                uint32_t gptrOffset = kv_offset[i * UNRLkvq + i_];
 
                 #pragma unroll
                 for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j)
                 {
-                    // smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
-                    // hipFIXED
-                    // smem.template load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
-                    //*smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
-                    const b128_t *gmem_ptr = reinterpret_cast<const b128_t *>(gptr);
-                    bool predicate = kv_idx < kv_len;
-                    pred_vals[i_][j] = predicate;
-                    load_vals[i_][j] = make_uint4(0, 0, 0, 0);
-                    if (predicate) // TODO:: buffer load for this
-                    {
-                        load_vals[i_][j] = *((uint4 *)gmem_ptr);
-                    }
-                    gptr += 8 * num_elems_per_128b<DType>();
+                  bool predicate = kv_idx < kv_len;
+                  pred_vals[i_][j] = predicate;
+                  using index_t = ck_tile::index_t;
+                  auto buff = ck_tile::amd_buffer_load_invalid_element_return_zero<uint16_t, (index_t)8>(gptr_base,
+                                                                                                         gptrOffset,
+                                                                                                         predicate,
+                                                                                                         0x3FFFFFFF);
+                  load_vals[i_][j] = buff.template get_as<ck_tile::uint16x8_t>().get(0);
+                  gptrOffset += 8 * num_elems_per_128b<DType>();
                 }
                 kv_idx += num_warps * 4;
             }
@@ -433,17 +427,17 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                 #pragma unroll
                 for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j)
                 {
-                    b128_t *smem_ptr = smem.base + *smem_offset;
-                    if (pred_vals[i_][j])
+                    ck_tile::uint16x8_t *smem_ptr = reinterpret_cast<ck_tile::uint16x8_t *>(smem.base + *smem_offset);
+                    if constexpr (fill_mode == SharedMemFillMode::kFillZero)
                     {
-                        *((uint4 *)smem_ptr) = load_vals[i_][j];
+                        *(smem_ptr) = load_vals[i_][j];
                     }
                     else
                     {
-                        if constexpr (fill_mode == SharedMemFillMode::kFillZero)
-                        {
-                            *((uint4 *)smem_ptr) = make_uint4(0, 0, 0, 0);
-                        }
+                      if (pred_vals[i_][j])
+                      {
+                          *(smem_ptr) = load_vals[i_][j];
+                      }
                     }
                     *smem_offset = smem.template advance_offset_by_column<8>(*smem_offset, j);
                 }
