@@ -1188,6 +1188,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q> *q_smem, uint3
     #pragma unroll
     for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d)
     {
+        __builtin_amdgcn_sched_barrier(1);
         #pragma unroll
         for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv)
         {
