@@ -16,7 +16,7 @@
 //#define FREE_Q_LDS
 #define FORCE_2_GRPS
 //#define PIPLN_KV_LD
-//#define UNRL_UNPPLN_KV_LD
+#define UNRL_UNPPLN_KV_LD
 //#define PIPLN_KV_IDX
 //#define UNRL_KV_IDX
 
@@ -31,6 +31,9 @@
 #include <hip/hip_fp16.h>
 #include <hip/hip_fp8.h>
 #include <hip/hip_runtime.h>
+#define CK_TILE_EXPERIMENTAL_USE_BUFFER_LOAD_OOB_CHECK_OFFSET_TRICK 1
+#include "ck_tile/core.hpp"
+
 #elif defined(__CUDACC__) || defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
 #include <cooperative_groups.h>
 #include <cuda_bf16.h>
@@ -392,6 +395,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
 
         DType * gptr_base = produce_v ? paged_kv.v_data : paged_kv.k_data;
         // TODO gptr_base can be a buffer resource from here
+        // create CK buffer resource
 
         #pragma unroll
         for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
@@ -1437,10 +1441,10 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant, smem_t<s
     DTypeQ s_frag_f16[NUM_MMA_Q][NUM_MMA_KV][4];
     if constexpr (std::is_same_v<DTypeQKAccum, float>)
     {
-#pragma unroll
+        #pragma unroll
         for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q)
         {
-#pragma unroll
+            #pragma unroll
             for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv)
             {
                 // vec_cast<DTypeQ, float>::cast<8>(s_frag_f16[mma_q][mma_kv], s_frag[mma_q][mma_kv]);
@@ -1464,10 +1468,10 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant, smem_t<s
 
     if constexpr (variant.use_softmax)
     {
-#pragma unroll
+        #pragma unroll
         for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q)
         {
-#pragma unroll
+            #pragma unroll
             for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv)
             {
                 __builtin_amdgcn_sched_barrier(1);

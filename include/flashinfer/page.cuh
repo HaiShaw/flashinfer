@@ -25,6 +25,10 @@
 #include "layout.cuh"
 #include "utils.cuh"
 #include "vec_dtypes.cuh"
+#if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
+#define CK_TILE_EXPERIMENTAL_USE_BUFFER_LOAD_OOB_CHECK_OFFSET_TRICK 1
+#include "ck/core.hpp"
+#endif
 
 namespace flashinfer {
 
@@ -198,6 +202,7 @@ struct paged_kv_t {
   __device__ __forceinline__ size_t protective_get_kv_offset(IdType page_iter, uint32_t head_idx,
                                                              uint32_t entry_idx, uint32_t feat_idx,
                                                              IdType last_indptr) const {
+
     if (page_iter < last_indptr) {
       return get_elem_offset(__builtin_nontemporal_load(indices + page_iter), head_idx, entry_idx, feat_idx);
     } else {
