@@ -584,6 +584,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
 
         if constexpr (isLoad)
         {
+          DType *gptrBase = produce_v ? paged_kv.v_data : paged_kv.k_data;
           #pragma unroll
           for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
           {

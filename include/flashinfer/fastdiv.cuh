@@ -64,38 +64,40 @@ struct uint_fastdiv {
 
   __host__ __device__ __forceinline__ operator unsigned int() const { return d; }
 
-  __host__ __device__ __forceinline__ void divmod(uint32_t n, uint32_t& q, uint32_t& r) const
-  {
+  __host__ __device__ __forceinline__ void divmod(uint32_t n, uint32_t& q, uint32_t& r) const {
+
 #ifdef __CUDA_ARCH__
-    q = __umulhi(m, n);
+      q = __umulhi(m, n);
 #else
-    q = (((unsigned long long)((long long)m * (long long)n)) >> 32);
+      q = (((unsigned long long)((long long)m * (long long)n)) >> 32);
 #endif
-    q += a * n;
-    q >>= s;
-    q = d == 1 ? n : q;
+      q += a * n;
+      q >>= s;
+    q = ((d == 1) ? n : q);
     r = n - q * d;
   }
 };
 
 __host__ __device__ __forceinline__ uint32_t operator/(const uint32_t n,
-                                                       const uint_fastdiv& divisor)
-{
+                                                       const uint_fastdiv& divisor) {
   uint32_t q;
+  if (divisor.d == 1) {
+    q = n;
+  } else {
 #ifdef __CUDA_ARCH__
-  q = __umulhi(divisor.m, n);
+    q = __umulhi(divisor.m, n);
 #else
-  q = (((unsigned long long)((long long)divisor.m * (long long)n)) >> 32);
+    q = (((unsigned long long)((long long)divisor.m * (long long)n)) >> 32);
 #endif
-  q += divisor.a * n;
-  q >>= divisor.s;
-  q = d == 1 ? n : q;
+    q += divisor.a * n;
+    q >>= divisor.s;
+  }
   return q;
 }
 
 __host__ __device__ __forceinline__ uint32_t operator%(const uint32_t n,
                                                        const uint_fastdiv& divisor) {
-  uint32_t quotient  = n / divisor;
+  uint32_t quotient = n / divisor;
   uint32_t remainder = n - quotient * divisor;
   return remainder;
 }
