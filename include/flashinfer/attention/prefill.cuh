@@ -1490,7 +1490,7 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant, smem_t<s
 #pragma unroll
             for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv)
             {
-                __builtin_amdgcn_sched_barrier(0);
+                __builtin_amdgcn_sched_barrier(1);
                 if constexpr (std::is_same_v<DTypeQKAccum, float>)
                 {
 // FIXME
