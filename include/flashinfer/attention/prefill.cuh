@@ -516,6 +516,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
           {
             DType *gptr = gptrBase + kv_offset[i];
 
+            #pragma unroll 1
             for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j)
             {
                 // smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
