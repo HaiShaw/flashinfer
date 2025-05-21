@@ -495,7 +495,6 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
 
         DType *gptrBase = produce_v ? paged_kv.v_data : paged_kv.k_data;
 
-        #pragma unroll
         for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i)
         {
           DType *gptr = gptrBase + kv_offset[i];
@@ -512,7 +511,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
           }
           else
           {
-            #pragma unroll 1
+            #pragma unroll
             for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j)
             {
                 // smem.load_128b_async<fill_mode>(*smem_offset, gptr, kv_idx < kv_len);
@@ -585,52 +584,37 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
 
         if constexpr (isLoad)
         {
-            // looping lambda expression that takes a function or lambda
-            const auto loopExecOuter = [&](auto&& innerOp){
-                #pragma unroll
-                for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
-                {
-                    #pragma unroll
-                    for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
-                    {
-                        innerOp(i, i_);
-                        kv_idx += num_warps * 4;
-                    }
-                }
-            };
-            DType *gptrBase = produce_v ? paged_kv.v_data : paged_kv.k_data;
-
-            const auto loopExeckv_idxSmall = [&](int i, int i_){
+          #pragma unroll
+          for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
+          {
+            #pragma unroll
+            for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
+            {
               DType *gptr = gptrBase + kv_offset[i * UNRLkvq + i_];
-              #pragma unroll
-              for (uint32_t j = 0; j < UNRLz; ++j)
+              if (kv_idx < kv_len)
               {
-                  const b128_t *gmem_ptr = reinterpret_cast<const b128_t *>(gptr);
-                  load_vals[i][i_][j] = *((uint4 *)gmem_ptr);
-                  gptr += 8 * num_elems_per_128b<DType>();
+                #pragma unroll
+                for (uint32_t j = 0; j < UNRLz; ++j)
+                {
+                    const b128_t *gmem_ptr = reinterpret_cast<const b128_t *>(gptr);
+                    load_vals[i][i_][j] = *((uint4 *)gmem_ptr);
+                    gptr += 8 * num_elems_per_128b<DType>();
+                }
               }
-            };
-
-            const auto loopExecKV_idxLarge = [&](int i, int i_){
-              #pragma unroll
-              for (uint32_t j = 0; j < UNRLz; ++j)
+              else
               {
-                  load_vals[i][i_][j] = make_uint4(0, 0, 0, 0);
-              }
-            };
-
-            if (kv_idx < kv_len)
-            {
-                loopExecOuter(loopExeckv_idxSmall);
-            }
-            else
-            {
                 if constexpr (fill_mode == SharedMemFillMode::kFillZero)
                 {
-                    loopExecOuter(loopExecKV_idxLarge);
+                    #pragma unroll
+                    for (uint32_t j = 0; j < UNRLz; ++j)
+                    {
+                        load_vals[i][i_][j] = make_uint4(0, 0, 0, 0);
+                    }
                 }
-
+              }
+              kv_idx += num_warps * 4;
             }
+          }
 
             return;
         }
