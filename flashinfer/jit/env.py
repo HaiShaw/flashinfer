@@ -58,3 +58,7 @@ CUTLASS_INCLUDE_DIRS = [
     _package_root / "data" / "cutlass" / "include",
     _package_root / "data" / "cutlass" / "tools" / "util" / "include",
 ]
+
+CK_INCLUDE_DIRS = [
+    _package_root / "data" / "composable_kernels" / "include",
+]

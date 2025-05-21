@@ -7,6 +7,7 @@ from typing import List, Union
 import torch.utils.cpp_extension as torch_cpp_ext
 from filelock import FileLock
 
+from .env import CK_INCLUDE_DIRS as CK_INCLUDE_DIRS
 from .env import CUTLASS_INCLUDE_DIRS as CUTLASS_INCLUDE_DIRS
 from .env import FLASHINFER_CSRC_DIR as FLASHINFER_CSRC_DIR
 from .env import FLASHINFER_GEN_SRC_DIR as FLASHINFER_GEN_SRC_DIR
@@ -130,7 +131,7 @@ def load_cuda_ops(
         with_cuda = None
         # cflags += ["-x", "hip"]
         # FIXME
-        cflags += ["-I/opt/rocm/include", "-D__HIP_PLATFORM_AMD__"]
+        cflags += ["-I/opt/rocm/include", "-D__HIP_PLATFORM_AMD__","--save-temps"]
         cuda_cflags += ["--offload-arch=gfx942", "-ffast-math", "-I/opt/rocm/include", "-L/opt/rocm/lib", "-lamdhip64", "-D__HIP_PLATFORM_AMD__"]
     else:
         cflags += ["-Wno-switch-bool"]
@@ -151,7 +152,7 @@ def load_cuda_ops(
             FLASHINFER_CSRC_DIR,
         ]
         if check_hip_availability():
-            extra_include_paths += []
+            extra_include_paths += CK_INCLUDE_DIRS
         elif check_cuda_availability():
             extra_include_paths += CUTLASS_INCLUDE_DIRS
     lock = FileLock(FLASHINFER_JIT_DIR / f"{name}.lock", thread_local=False)
