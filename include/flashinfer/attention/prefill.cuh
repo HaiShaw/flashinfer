@@ -383,14 +383,17 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
         // NOTE(Zihao): NUM_MMA_KV * 4 / NUM_WARPS_Q = NUM_WARPS_KV * NUM_MMA_KV * 4 / num_warps
         static_assert(NUM_MMA_KV * 4 % NUM_WARPS_Q == 0);
         // printf("\n-----%d,------\n", NUM_WARPS_Q);
-        constexpr uint32_t UNRLkvq_ATMP = 1;
-        constexpr uint32_t NUM_MMA_KVQ = NUM_MMA_KV * 4 / NUM_WARPS_Q;
-        constexpr uint32_t NUM_MMA_KVQ_UNRL = NUM_MMA_KVQ / UNRLkvq_ATMP;
+        constexpr uint32_t UNRLkvq_ATMP      = 1;
+        constexpr uint32_t NUM_MMA_KVQ       = NUM_MMA_KV * 4 / NUM_WARPS_Q;
+        constexpr uint32_t NUM_MMA_KVQ_UNRL  = NUM_MMA_KVQ / UNRLkvq_ATMP;
         constexpr uint32_t NUM_MMA_KVQ_UNRLD = NUM_MMA_KVQ_UNRL > 1 ? NUM_MMA_KVQ_UNRL : 1;
-        constexpr uint32_t UNRLkvq = NUM_MMA_KVQ / NUM_MMA_KVQ_UNRLD;
+        constexpr uint32_t UNRLkvq           = NUM_MMA_KVQ / NUM_MMA_KVQ_UNRLD;
         // printf("\n-----%d,%d------\n", UNRLkvq, NUM_MMA_KVQ_UNRLD);
+
+        DType * gptr_base = produce_v ? paged_kv.v_data : paged_kv.k_data;
+        // TODO gptr_base can be a buffer reasource from here
+
         #pragma unroll
-        // for (uint32_t i = 0; i < NUM_MMA_KV * 4 / NUM_WARPS_Q; ++i) {
         for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
         {
             uint4 load_vals[UNRLkvq][NUM_MMA_D / (8 / sizeof(DType))];
@@ -398,8 +401,8 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
             #pragma unroll
             for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
             {
-                DType *gptr = produce_v ? paged_kv.v_data + kv_offset[i * UNRLkvq + i_]
-                                        : paged_kv.k_data + kv_offset[i * UNRLkvq + i_];
+                DType *gptr = gptr_base + kv_offset[i * UNRLkvq + i_];
+
                 #pragma unroll
                 for (uint32_t j = 0; j < NUM_MMA_D / (8 / sizeof(DType)); ++j)
                 {
@@ -411,8 +414,10 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                     bool predicate = kv_idx < kv_len;
                     pred_vals[i_][j] = predicate;
                     load_vals[i_][j] = make_uint4(0, 0, 0, 0);
-                    if (predicate)
+                    if (predicate) // TODO:: buffer load for this
+                    {
                         load_vals[i_][j] = *((uint4 *)gmem_ptr);
+                    }
                     gptr += 8 * num_elems_per_128b<DType>();
                 }
                 kv_idx += num_warps * 4;
@@ -2545,7 +2550,8 @@ __global__
                      real_lane_idx / 16 / 2),
                  kv_smem_offset_w = k_smem.template get_permuted_offset<channel_size_128b_kv>(
                      warp_idx * kv_frag_rows + lane_idx / kv_frag_cols, lane_idx % kv_frag_cols);
-        const IdType last_indptr = paged_kv.indptr[paged_kv.batch_size];
+
+        const IdType last_indptr = paged_kv.indptr[paged_kv.batch_size];// end of buffer, can use to get size of buffer
 
         uint32_t packed_page_iter_base = paged_kv.indptr[request_idx] * paged_kv.page_size + chunk_start;
 
@@ -2619,7 +2625,7 @@ __global__
         }
 #endif
 
-#pragma unroll 1
+        #pragma unroll 1
         for (uint32_t iter = 0; iter < num_iterations; ++iter)
         {
             packed_page_iter_base += 16 * NUM_WARPS_KV * NUM_MMA_KV;
@@ -2694,7 +2700,6 @@ __global__
                 kv_page_idx[i] = paged_kv.get_kv_page_idx(pidx / paged_kv.page_size);
             }
 #endif
-
             // compute attention score
             __syncthreads();
 
@@ -2800,10 +2805,10 @@ __global__
             {
                 if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0)
                 {
-#pragma unroll
+                    #pragma unroll
                     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q)
                     {
-#pragma unroll
+                        #pragma unroll
                         for (uint32_t j = 0; j < 1; ++j)
                         {
                             uint32_t q, r;
