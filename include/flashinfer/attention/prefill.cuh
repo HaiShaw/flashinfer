@@ -1012,14 +1012,14 @@ __device__ __forceinline__ void produce_q(smem_t<swizzle_mode_q> *q_smem, uint32
                                           smem_t<swizzle_mode_kv> *k_smem, uint32_t *k_smem_offset_r,
                                           MFMADTypeQ (*a_frag)[NUM_MMA_Q][4])
 {
-    constexpr uint32_t head_dim = NUM_MMA_D * 16;
-    constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
+    constexpr uint32_t head_dim             = NUM_MMA_D * 16;
+    constexpr uint32_t channel_size_128b_q  = head_dim / num_elems_per_128b<DTypeQ>();
     constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
 
     const uint32_t real_lane_idx = threadIdx.x;
 
     using ab_frag_type = typename mfma_m16n16k16_f32<DTypeQ>::ab_fragment_type;
-    using c_frag_type = typename mfma_m16n16k16_f32<DTypeQ>::c_fragment_type;
+    using c_frag_type  = typename mfma_m16n16k16_f32<DTypeQ>::c_fragment_type;
 
     // ab_frag_type a_frag[NUM_MMA_D][NUM_MMA_Q];
     ab_frag_type b_frag;
@@ -1163,14 +1163,14 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q> *q_smem, uint3
                                            smem_t<swizzle_mode_kv> *k_smem, uint32_t *k_smem_offset_r,
                                            DTypeQKAccum (*s_frag)[NUM_MMA_KV][4], MFMADTypeQ (*a_frag)[NUM_MMA_Q][4])
 {
-    constexpr uint32_t head_dim = NUM_MMA_D * 16;
-    constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
+    constexpr uint32_t head_dim             = NUM_MMA_D * 16;
+    constexpr uint32_t channel_size_128b_q  = head_dim / num_elems_per_128b<DTypeQ>();
     constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
 
     const uint32_t real_lane_idx = threadIdx.x;
 
     using ab_frag_type = typename mfma_m16n16k16_f32<DTypeQ>::ab_fragment_type;
-    using c_frag_type = typename mfma_m16n16k16_f32<DTypeQ>::c_fragment_type;
+    using c_frag_type  = typename mfma_m16n16k16_f32<DTypeQ>::c_fragment_type;
 
     ab_frag_type b_frag;
 
@@ -1218,7 +1218,6 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q> *q_smem, uint3
                 {
                     *(c_frag_type *)s_frag[mma_q][mma_kv] = mfma_m16n16k16_f32<DTypeQ>::run(
                         b_frag, *(ab_frag_type *)a_frag[mma_d][mma_q], *(c_frag_type *)s_frag[mma_q][mma_kv]);
-
                 }
 #if 0  // disable half MMA on ROCm platform
                 else if (std::is_same_v<DTypeQKAccum, half>)
@@ -2413,12 +2412,14 @@ __global__
 
 #ifdef PIPLN_KV_LD
         // BUFFERS FOR IN-FLIGHT LOADS
-        constexpr uint32_t UNRLkvq_ATMP = 4;
-        constexpr uint32_t NUM_MMA_KVQ = NUM_MMA_KV * 4 / NUM_WARPS_Q;
-        constexpr uint32_t NUM_MMA_KVQ_UNRL = NUM_MMA_KVQ / UNRLkvq_ATMP;
+        constexpr uint32_t UNRLkvq_ATMP      = 4;
+        constexpr uint32_t NUM_MMA_KVQ       = NUM_MMA_KV * 4 / NUM_WARPS_Q;
+        constexpr uint32_t NUM_MMA_KVQ_UNRL  = NUM_MMA_KVQ / UNRLkvq_ATMP;
         constexpr uint32_t NUM_MMA_KVQ_UNRLD = NUM_MMA_KVQ_UNRL > 1 ? NUM_MMA_KVQ_UNRL : 1;
-        constexpr uint32_t UNRLkvq = NUM_MMA_KVQ / NUM_MMA_KVQ_UNRLD;
+        constexpr uint32_t UNRLkvq           = NUM_MMA_KVQ / NUM_MMA_KVQ_UNRLD;
+
         constexpr uint32_t UNRLz = (1 > NUM_MMA_D / (8 / sizeof(DTypeKV))) ? 1 : NUM_MMA_D / (8 / sizeof(DTypeKV));
+
         uint4 load_vals[1][NUM_MMA_KVQ_UNRLD][UNRLkvq][UNRLz] = {make_uint4(0, 0, 0, 0)};
 #endif
 
@@ -2434,24 +2435,27 @@ __global__
         {
             return;
         }
+
         const uint32_t num_kv_heads = gridDim.z, num_qo_heads = num_kv_heads * group_size;
 
         const uint32_t request_idx = request_indices[bx], qo_tile_idx = qo_tile_indices[bx],
                        kv_tile_idx = kv_tile_indices[bx];
         constexpr uint32_t num_rows_per_cta = NUM_MMA_Q * NUM_WARPS_Q * 16;
+
         extern __shared__ uint8_t smem[];
+
         AttentionVariant variant(params, /*batch_idx=*/request_idx, smem);
-        const uint32_t qo_len = variant.qo_len, kv_len = variant.kv_len, window_left = variant.window_left;
-        const uint32_t kv_len_safe = kv_len > 0 ? kv_len : 1;
+        const uint32_t qo_len         = variant.qo_len, kv_len = variant.kv_len, window_left = variant.window_left;
+        const uint32_t kv_len_safe    = kv_len > 0 ? kv_len : 1;
         const uint32_t max_chunk_size = partition_kv ? kv_chunk_size : kv_len;
-        const uint32_t chunk_start = partition_kv ? kv_tile_idx * max_chunk_size : 0;
-        const uint32_t chunk_end = partition_kv ? min((kv_tile_idx + 1) * max_chunk_size, kv_len) : kv_len;
-        const uint32_t chunk_size = chunk_end - chunk_start;
+        const uint32_t chunk_start    = partition_kv ? kv_tile_idx * max_chunk_size : 0;
+        const uint32_t chunk_end      = partition_kv ? min((kv_tile_idx + 1) * max_chunk_size, kv_len) : kv_len;
+        const uint32_t chunk_size     = chunk_end - chunk_start;
         const uint32_t qo_upper_bound = min(qo_len, ceil_div((qo_tile_idx + 1) * num_rows_per_cta, group_size));
 
-        constexpr uint32_t head_dim = NUM_MMA_D * 16;
-        constexpr uint32_t channel_size_128b_q = head_dim / num_elems_per_128b<DTypeQ>();
-        constexpr uint32_t channel_size_128b_kv = head_dim / num_elems_per_128b<DTypeKV>();
+        constexpr uint32_t head_dim              = NUM_MMA_D * 16;
+        constexpr uint32_t channel_size_128b_q   = head_dim / num_elems_per_128b<DTypeQ>();
+        constexpr uint32_t channel_size_128b_kv  = head_dim / num_elems_per_128b<DTypeKV>();
         constexpr uint32_t channel_size_128b_out = head_dim / num_elems_per_128b<DTypeO>();
 
         // DTypeQKAccum s_frag[NUM_MMA_Q][NUM_MMA_KV][4];
@@ -2546,7 +2550,7 @@ __global__
 
         uint32_t packed_page_iter_base = paged_kv.indptr[request_idx] * paged_kv.page_size + chunk_start;
 
-#pragma unroll
+        #pragma unroll
         for (uint32_t i = 0; i < NUM_MMA_KV * (swizzle_mode_kv == SwizzleMode::k128B ? 4 : 2) / NUM_WARPS_Q; ++i)
         {
             uint32_t page_iter, entry_idx;
