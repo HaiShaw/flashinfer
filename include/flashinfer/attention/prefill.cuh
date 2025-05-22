@@ -395,7 +395,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
 
         uint16_t * gptr_base = reinterpret_cast<uint16_t*>(produce_v ? paged_kv.v_data : paged_kv.k_data);
 
-        #pragma unroll
+        #pragma nounroll
         for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
         {
             ck_tile::uint16x8_t load_vals[UNRLkvq][NUM_MMA_D / (8 / sizeof(DType))];
@@ -420,8 +420,8 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                 }
                 kv_idx += num_warps * 4;
             }
-            __builtin_amdgcn_sched_barrier(0);
-            #pragma unroll
+
+            #pragma nounroll
             for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
             {
                 #pragma unroll
@@ -589,28 +589,23 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
             #pragma unroll
             for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
             {
-              DType *gptr = gptrBase + kv_offset[i * UNRLkvq + i_];
-              if (kv_idx < kv_len)
+              uint32_t gptrOffset = kv_offset[i * UNRLkvq + i_];
+
+              #pragma unroll
+              for (uint32_t j = 0; j < UNRLz; ++j)
               {
-                #pragma unroll
-                for (uint32_t j = 0; j < UNRLz; ++j)
-                {
-                    const b128_t *gmem_ptr = reinterpret_cast<const b128_t *>(gptr);
-                    load_vals[i][i_][j] = *((uint4 *)gmem_ptr);
-                    gptr += 8 * num_elems_per_128b<DType>();
-                }
+                  // const b128_t *gmem_ptr = reinterpret_cast<const b128_t *>(gptr);
+                  auto buff = ck_tile::amd_buffer_load_invalid_element_return_zero<uint16_t, (ck_tile::index_t)8>(
+                                                                                      gptrBase,
+                                                                                      gptrOffset,
+                                                                                      (kv_idx < kv_len),
+                                                                                      0x3FFFFFFF);
+                  load_vals[i][i_][j] = buff.template get_as<uint4>().get(0);
+
+                  // load_vals[i][i_][j] = *((uint4 *)gmem_ptr);
+                  gptrOffset += 8 * num_elems_per_128b<DType>();
               }
-              else
-              {
-                if constexpr (fill_mode == SharedMemFillMode::kFillZero)
-                {
-                    #pragma unroll
-                    for (uint32_t j = 0; j < UNRLz; ++j)
-                    {
-                        load_vals[i][i_][j] = make_uint4(0, 0, 0, 0);
-                    }
-                }
-              }
+
               kv_idx += num_warps * 4;
             }
           }
@@ -2688,17 +2683,15 @@ __global__
             compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ, DTypeKV>(
                 &qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag, a_frag);
 #else
-        compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ, DTypeKV>(
-            &qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
+            compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ, DTypeKV>(
+                &qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
 #endif
 
-            __builtin_amdgcn_sched_barrier(0);
             logits_transform<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
                 params, variant, /*batch_idx=*/request_idx, qo_packed_idx_base,
                 chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) * NUM_MMA_KV * 16,
                 qo_len, kv_len, group_size, s_frag);
 
-            __builtin_amdgcn_sched_barrier(0);
             // apply mask
             if (MASK_MODE == MaskMode::kCustom || (iter >= mask_iteration || iter < window_iteration))
             {
