@@ -206,7 +206,6 @@ struct paged_kv_t {
                                                                                          (page_iter < last_indptr),
                                                                                          0x1FFFFFFF);
     IdType result = buff.data[0];
-    asm volatile(";protective get kv buffer load");
     size_t output = get_elem_offset(result, head_idx, entry_idx, feat_idx);
     return (page_iter < last_indptr) ? output : 0;
   }
