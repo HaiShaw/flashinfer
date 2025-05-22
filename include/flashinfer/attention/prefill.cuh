@@ -394,8 +394,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
         // printf("\n-----%d,%d------\n", UNRLkvq, NUM_MMA_KVQ_UNRLD);
 
         uint16_t * gptr_base = reinterpret_cast<uint16_t*>(produce_v ? paged_kv.v_data : paged_kv.k_data);
-
-        #pragma nounroll
+        #pragma unroll
         for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
         {
             ck_tile::uint16x8_t load_vals[UNRLkvq][NUM_MMA_D / (8 / sizeof(DType))];
@@ -421,7 +420,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                 kv_idx += num_warps * 4;
             }
 
-            #pragma nounroll
+            #pragma unroll
             for (uint32_t i_ = 0; i_ < UNRLkvq; ++i_)
             {
                 #pragma unroll
@@ -445,6 +444,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                                sizeof(DType) * NUM_MMA_D;
             }
         }
+
         *smem_offset -= NUM_WARPS_KV * NUM_MMA_KV * 16 * channel_size_128b_kv;
     }
     else
@@ -2046,7 +2046,7 @@ __global__ __launch_bounds__(NUM_WARPS_Q *NUM_WARPS_KV *WARP_SIZE) void SinglePr
             v_smem, &kv_smem_offset_w, &v_ptr, kv_stride_n, 0, chunk_size);
         cp_async::commit_group();
 
-#pragma unroll 1
+        #pragma nounroll
         for (uint32_t iter = 0; iter < num_iterations; ++iter)
         {
             cp_async::wait_group<1>();
@@ -2125,10 +2125,10 @@ __global__ __launch_bounds__(NUM_WARPS_Q *NUM_WARPS_KV *WARP_SIZE) void SinglePr
             {
                 if (get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>() == 0)
                 {
-#pragma unroll
+                    #pragma unroll
                     for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q)
                     {
-#pragma unroll
+                        #pragma unroll
                         for (uint32_t j = 0; j < 1; ++j)
                         {
                             uint32_t q, r;
@@ -2593,7 +2593,7 @@ __global__
         }
 #endif
 
-        #pragma unroll 1
+        #pragma nounroll
         for (uint32_t iter = 0; iter < num_iterations; ++iter)
         {
             packed_page_iter_base += 16 * NUM_WARPS_KV * NUM_MMA_KV;

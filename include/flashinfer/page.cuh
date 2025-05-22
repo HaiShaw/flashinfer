@@ -200,13 +200,15 @@ struct paged_kv_t {
   __device__ __forceinline__ size_t protective_get_kv_offset(IdType page_iter, uint32_t head_idx,
                                                              uint32_t entry_idx, uint32_t feat_idx,
                                                              IdType last_indptr) const {
-
-
-    if (page_iter < last_indptr) {
-      return get_elem_offset(__builtin_nontemporal_load(indices + page_iter), head_idx, entry_idx, feat_idx);
-    } else {
-      return 0;
-    }
+    using index_t = ck_tile::index_t;
+    auto buff = ck_tile::amd_buffer_load_invalid_element_return_zero<IdType, (index_t)1>(indices,
+                                                                                         page_iter,
+                                                                                         (page_iter < last_indptr),
+                                                                                         0x1FFFFFFF);
+    IdType result = buff.data[0];
+    asm volatile(";protective get kv buffer load");
+    size_t output = get_elem_offset(result, head_idx, entry_idx, feat_idx);
+    return (page_iter < last_indptr) ? output : 0;
   }
 
   __device__ __forceinline__ DType* protective_get_k_ptr(IdType page_iter, uint32_t head_idx,
