@@ -1330,9 +1330,17 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant, DTyp
                                             max(s_frag[mma_q][mma_kv][j * 2 + 2], s_frag[mma_q][mma_kv][j * 2 + 3]));
                         m[mma_q][j] = max(m[mma_q][j], m_local);
                     }
-                    m[mma_q][j] = max(m[mma_q][j], math::shfl_xor_sync(m[mma_q][j], 0x10));
-                    m[mma_q][j] = max(m[mma_q][j], math::shfl_xor_sync(m[mma_q][j], 0x20));
-
+                    //m[mma_q][j] = max(m[mma_q][j], math::shfl_xor_sync(m[mma_q][j], 0x10));
+                    //m[mma_q][j] = max(m[mma_q][j], math::shfl_xor_sync(m[mma_q][j], 0x20));
+		    DTypeQKAccum lcl_m = m[mma_q][j];
+                    for (int r=0; r<16; r++)
+                      lcl_m = __builtin_bit_cast(DTypeQKAccum, __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, lcl_m), 0x134, 0xf, 0xf, 0)); //wave_rol1
+                    DTypeQKAccum lcl_m2 = max(m[mma_q][j], lcl_m);
+		    lcl_m = lcl_m2;
+                    for (int r=0; r<32; r++)
+                      lcl_m = __builtin_bit_cast(DTypeQKAccum, __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, lcl_m), 0x134, 0xf, 0xf, 0)); //wave_rol1
+                    m[mma_q][j] = max(lcl_m2, lcl_m);
+ 
                     float o_scale = __builtin_amdgcn_exp2f(m_prev - m[mma_q][j]);
                     d[mma_q][j] *= o_scale;
                     #pragma unroll
@@ -1483,9 +1491,17 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant, smem_t<s
 #else
                     DTypeQKAccum local_rowsum = (s_frag[mma_q][mma_kv][0] + s_frag[mma_q][mma_kv][1] +
                                                  s_frag[mma_q][mma_kv][2] + s_frag[mma_q][mma_kv][3]);
-                    local_rowsum = local_rowsum + math::shfl_xor_sync(local_rowsum, 0x10);
-                    local_rowsum = local_rowsum + math::shfl_xor_sync(local_rowsum, 0x20);
-
+                    //local_rowsum = local_rowsum + math::shfl_xor_sync(local_rowsum, 0x10);
+                    //local_rowsum = local_rowsum + math::shfl_xor_sync(local_rowsum, 0x20);
+                    DTypeQKAccum lcl_rowsum = local_rowsum;
+                    for (int r=0; r<16; r++)
+                      lcl_rowsum = __builtin_bit_cast(DTypeQKAccum, __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, lcl_rowsum), 0x134, 0xf, 0xf, 0)); //wave_rol1
+                    local_rowsum += lcl_rowsum;
+                    lcl_rowsum = local_rowsum;
+                    for (int r=0; r<32; r++)
+                      lcl_rowsum = __builtin_bit_cast(DTypeQKAccum, __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, lcl_rowsum), 0x134, 0xf, 0xf, 0)); //wave_rol1
+                    local_rowsum += lcl_rowsum;
+ 
                     d[mma_q][0] = d[mma_q][0] + local_rowsum;
 #endif // disable MMA on ROCm platform
                 }
