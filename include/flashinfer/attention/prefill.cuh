@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-//#define FREE_Q_LDS
+#define FREE_Q_LDS
 #define FORCE_2_GRPS
 //#define PIPLN_KV_LD
 #define UNRL_UNPPLN_KV_LD
@@ -394,7 +394,8 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
         // printf("\n-----%d,%d------\n", UNRLkvq, NUM_MMA_KVQ_UNRLD);
 
         uint16_t * gptr_base = reinterpret_cast<uint16_t*>(produce_v ? paged_kv.v_data : paged_kv.k_data);
-        #pragma nounroll
+
+        #pragma unroll
         for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
         {
             ck_tile::uint16x8_t load_vals[UNRLkvq][NUM_MMA_D / (8 / sizeof(DType))];
@@ -444,7 +445,6 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
                                sizeof(DType) * NUM_MMA_D;
             }
         }
-
         *smem_offset -= NUM_WARPS_KV * NUM_MMA_KV * 16 * channel_size_128b_kv;
     }
     else
@@ -1048,6 +1048,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q> *q_smem, uint3
     #pragma unroll
     for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d)
     {
+        __builtin_amdgcn_sched_barrier(0);
         ab_frag_type a_frag[NUM_MMA_Q];
         #pragma unroll
         for (uint32_t mma_q = 0; mma_q < NUM_MMA_Q; ++mma_q)
@@ -1160,6 +1161,7 @@ __device__ __forceinline__ void compute_qk(smem_t<swizzle_mode_q> *q_smem, uint3
     #pragma unroll
     for (uint32_t mma_d = 0; mma_d < NUM_MMA_D; ++mma_d)
     {
+        __builtin_amdgcn_sched_barrier(1);
         #pragma unroll
         for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv)
         {
@@ -1241,6 +1243,7 @@ __device__ __forceinline__ void logits_transform(const typename AttentionVariant
     {
         uint32_t q, r;
         group_size.divmod(qo_packed_idx_base + mma_q * 16 + real_lane_idx % 16, q, r);
+        __builtin_amdgcn_sched_barrier(0);
 
         for (uint32_t mma_kv = 0; mma_kv < NUM_MMA_KV; ++mma_kv)
         {
@@ -1285,7 +1288,7 @@ __device__ __forceinline__ void logits_mask(const typename AttentionVariant::Par
                     (!(MASK_MODE == MaskMode::kCausal ? (kv_idx + qo_len > kv_len + q_idx || (kv_idx >= chunk_end))
                                                       : kv_idx >= chunk_end)) &&
                     variant.LogitsMask(params, batch_idx, q_idx, kv_idx, qo_head_idx, kv_head_idx);
-                if(!mask) // branch in core of triple loop, avoid this
+                if(!mask)
                 {
                   s_frag[mma_q][mma_kv][reg_id] = (variant.use_softmax ? DTypeQKAccum(-math::inf) : DTypeQKAccum(0.f));
                 }
@@ -1326,7 +1329,7 @@ __device__ __forceinline__ void update_mdo_states(AttentionVariant variant, DTyp
                     for (int r=0; r<32; r++)
                       lcl_m = __builtin_bit_cast(DTypeQKAccum, __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, lcl_m), 0x134, 0xf, 0xf, 0)); //wave_rol1
                     m[mma_q][j] = max(lcl_m2, lcl_m);
- 
+
                     float o_scale = __builtin_amdgcn_exp2f(m_prev - m[mma_q][j]);
                     d[mma_q][j] *= o_scale;
                     #pragma unroll
@@ -1487,7 +1490,7 @@ __device__ __forceinline__ void compute_sfm_v(AttentionVariant variant, smem_t<s
                     for (int r=0; r<32; r++)
                       lcl_rowsum = __builtin_bit_cast(DTypeQKAccum, __builtin_amdgcn_mov_dpp(__builtin_bit_cast(int, lcl_rowsum), 0x134, 0xf, 0xf, 0)); //wave_rol1
                     local_rowsum += lcl_rowsum;
- 
+
                     d[mma_q][0] = d[mma_q][0] + local_rowsum;
 #endif // disable MMA on ROCm platform
                 }
@@ -2615,12 +2618,9 @@ __global__
             kv_page_idx[i] = paged_kv.get_kv_page_idx(page_iter);
         }
 #endif
-        __builtin_amdgcn_sched_barrier(0);
-        asm volatile("; begin main processing");
-        __builtin_amdgcn_sched_barrier(0);
 
-        uint32_t iter = 0;
-        do
+        #pragma unroll 1
+        for (uint32_t iter = 0; iter < num_iterations; ++iter)
         {
             packed_page_iter_base += 16 * NUM_WARPS_KV * NUM_MMA_KV;
 
@@ -2658,6 +2658,7 @@ __global__
                                                              (lane_idx % kv_frag_cols) * num_elems_per_128b<DTypeKV>(),
                                                              last_indptr);
 
+            __builtin_amdgcn_sched_barrier(0);
         }
 #endif
 #endif
@@ -2708,14 +2709,17 @@ __global__
             compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ, DTypeKV>(
                 &qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag, a_frag);
 #else
-            compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ, DTypeKV>(
-                &qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
+        compute_qk<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV, swizzle_mode_q, swizzle_mode_kv, DTypeQ, DTypeKV>(
+            &qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
 #endif
+
+            __builtin_amdgcn_sched_barrier(0);
             logits_transform<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
                 params, variant, /*batch_idx=*/request_idx, qo_packed_idx_base,
                 chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) * NUM_MMA_KV * 16,
                 qo_len, kv_len, group_size, s_frag);
 
+            __builtin_amdgcn_sched_barrier(0);
             // apply mask
             if (MASK_MODE == MaskMode::kCustom || (iter >= mask_iteration || iter < window_iteration))
             {
@@ -2765,13 +2769,7 @@ __global__
                 v_smem, &kv_smem_offset_w, paged_kv, (iter + 1) * 16 * NUM_WARPS_KV * NUM_MMA_KV, kv_offset,
                 chunk_size);
 #endif
-        ++iter;
-        }while(iter < num_iterations);
-
-        __builtin_amdgcn_sched_barrier(0);
-        asm volatile("; end main processing");
-        __builtin_amdgcn_sched_barrier(0);
-
+        }
         cp_async::wait_group<0>();
         block.sync();
         __syncthreads();
