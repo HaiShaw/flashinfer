@@ -27,7 +27,7 @@
 #include "vec_dtypes.cuh"
 #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
 #define CK_TILE_EXPERIMENTAL_USE_BUFFER_LOAD_OOB_CHECK_OFFSET_TRICK 1
-#include "ck_tile/core.hpp"
+#include "ck/core.hpp"
 #endif
 
 namespace flashinfer {
@@ -192,22 +192,22 @@ struct paged_kv_t {
   __device__ __forceinline__ size_t protective_get_kv_offset(size_t page_idx, IdType page_iter, uint32_t head_idx,
                                                              uint32_t entry_idx, uint32_t feat_idx,
                                                              IdType last_indptr) const {
-
-      size_t output = get_elem_offset(page_idx, head_idx, entry_idx, feat_idx);
-      return (page_iter < last_indptr) ? output : 0;
+    if (page_iter < last_indptr) {
+      return get_elem_offset(page_idx, head_idx, entry_idx, feat_idx);
+    } else {
+      return 0;
+    }
   }
 
   __device__ __forceinline__ size_t protective_get_kv_offset(IdType page_iter, uint32_t head_idx,
                                                              uint32_t entry_idx, uint32_t feat_idx,
                                                              IdType last_indptr) const {
-    using index_t = ck_tile::index_t;
-    auto buff = ck_tile::amd_buffer_load_invalid_element_return_zero<IdType, (index_t)1>(indices,
-                                                                                         page_iter,
-                                                                                         (page_iter < last_indptr),
-                                                                                         0x1FFFFFFF);
-    IdType result = buff.data[0];
-    size_t output = get_elem_offset(result, head_idx, entry_idx, feat_idx);
-    return (page_iter < last_indptr) ? output : 0;
+
+    if (page_iter < last_indptr) {
+      return get_elem_offset(__builtin_nontemporal_load(indices + page_iter), head_idx, entry_idx, feat_idx);
+    } else {
+      return 0;
+    }
   }
 
   __device__ __forceinline__ DType* protective_get_k_ptr(IdType page_iter, uint32_t head_idx,

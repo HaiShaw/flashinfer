@@ -131,7 +131,7 @@ def load_cuda_ops(
         with_cuda = None
         # cflags += ["-x", "hip"]
         # FIXME
-        cflags += ["-I/opt/rocm/include", "-D__HIP_PLATFORM_AMD__","--save-temps","-DCK_TILE_EXPERIMENTAL_USE_BUFFER_LOAD_OOB_CHECK_OFFSET_TRICK"]
+        cflags += ["-I/opt/rocm/include", "-D__HIP_PLATFORM_AMD__","--save-temps"]
         cuda_cflags += ["--offload-arch=gfx942", "-ffast-math", "-I/opt/rocm/include", "-L/opt/rocm/lib", "-lamdhip64", "-D__HIP_PLATFORM_AMD__"]
     else:
         cflags += ["-Wno-switch-bool"]
