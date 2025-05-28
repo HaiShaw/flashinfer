@@ -27,7 +27,7 @@
 #include "vec_dtypes.cuh"
 #if defined(__HIPCC__) || (defined(__clang__) && defined(__HIP__)) || defined(__HIPCC_RTC__)
 #define CK_TILE_EXPERIMENTAL_USE_BUFFER_LOAD_OOB_CHECK_OFFSET_TRICK 1
-#include "ck/core.hpp"
+#include "ck_tile/core.hpp"
 #endif
 
 namespace flashinfer {
