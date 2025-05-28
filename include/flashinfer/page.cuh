@@ -182,11 +182,30 @@ struct paged_kv_t {
 
   __device__ __forceinline__ DType* get_k_ptr(IdType page_iter, uint32_t head_idx,
                                               uint32_t entry_idx, uint32_t feat_idx) const {
-    return k_data + get_elem_offset(__builtin_nontemporal_load(indices + page_iter), head_idx, entry_idx, feat_idx);
+
+    using index_t = ck_tile::index_t;
+    auto buff = ck_tile::amd_buffer_load_invalid_element_return_zero<IdType,
+                                                                     (index_t)1,
+                                                                     ck_tile::amd_buffer_coherence_enum::slc,
+                                                                     false>(
+                                                                              indices,
+                                                                                page_iter,
+                                                                                true,
+                                                                                0x1FFFFFFF);
+    return k_data + get_elem_offset(buff.data[0], head_idx, entry_idx, feat_idx);
   }
 
   __device__ __forceinline__ size_t get_kv_page_idx (IdType page_iter) const {
-    return __builtin_nontemporal_load(indices + page_iter);
+    using index_t = ck_tile::index_t;
+    auto buff = ck_tile::amd_buffer_load_invalid_element_return_zero<IdType,
+                                                                     (index_t)1,
+                                                                     ck_tile::amd_buffer_coherence_enum::slc,
+                                                                     false>(
+                                                                            indices,
+                                                                            page_iter,
+                                                                            true,
+                                                                            0x1FFFFFFF);
+    return buff.data[0];
   }
 
   __device__ __forceinline__ size_t protective_get_kv_offset(size_t page_idx, IdType page_iter, uint32_t head_idx,
@@ -201,7 +220,10 @@ struct paged_kv_t {
                                                              uint32_t entry_idx, uint32_t feat_idx,
                                                              IdType last_indptr) const {
     using index_t = ck_tile::index_t;
-    auto buff = ck_tile::amd_buffer_load_invalid_element_return_zero<IdType, (index_t)1>(indices,
+    auto buff = ck_tile::amd_buffer_load_invalid_element_return_zero<IdType,
+                                                                     (index_t)1,
+                                                                     ck_tile::amd_buffer_coherence_enum::slc>(
+                                                                                        indices,
                                                                                          page_iter,
                                                                                          (page_iter < last_indptr),
                                                                                          0x1FFFFFFF);
