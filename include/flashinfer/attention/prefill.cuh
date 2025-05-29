@@ -585,6 +585,7 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
         if constexpr (isLoad)
         {
           DType *gptrBase = produce_v ? paged_kv.v_data : paged_kv.k_data;
+          uint16_t * gptr_base = reinterpret_cast<uint16_t*>(gptrBase);
           #pragma unroll
           for (uint32_t i = 0; i < NUM_MMA_KVQ_UNRLD; ++i)
           {
@@ -597,9 +598,9 @@ __device__ __forceinline__ void page_produce_kv(smem_t<swizzle_mode> smem, uint3
               for (uint32_t j = 0; j < UNRLz; ++j)
               {
                   // const b128_t *gmem_ptr = reinterpret_cast<const b128_t *>(gptr);
-
-                  auto buff = ck_tile::amd_buffer_load_invalid_element_return_zero<uint16_t, (ck_tile::index_t)8>(
-				  gptrBase,
+                  using index_t = ck_tile::index_t;
+                  auto buff = ck_tile::amd_buffer_load_invalid_element_return_zero<uint16_t, (index_t)8>(
+				  gptr_base,
                                   gptrOffset,
                                   (kv_idx < kv_len),
                                   0x3FFFFFFF);
