@@ -2594,6 +2594,8 @@ __global__
             kv_page_idx[i] = paged_kv.get_kv_page_idx(page_iter);
         }
 #endif
+        // in the absence of a known default prio, lets use 2, giving us one level up, and two down of freedom
+        __builtin_amdgcn_s_setprio(2);
 
         #pragma unroll 1
         for (uint32_t iter = 0; iter < num_iterations; ++iter)
@@ -2689,10 +2691,15 @@ __global__
             &qo_smem, &q_smem_offset_r, &k_smem, &k_smem_offset_r, s_frag);
 #endif
 
+            //drop priority for logits transform
+            __builtin_amdgcn_s_setprio(0);
+
             logits_transform<NUM_MMA_Q, NUM_MMA_D, NUM_MMA_KV>(
                 params, variant, /*batch_idx=*/request_idx, qo_packed_idx_base,
                 chunk_start + (iter * NUM_WARPS_KV + get_warp_idx_kv<NUM_WARPS_Q, NUM_WARPS_KV>()) * NUM_MMA_KV * 16,
                 qo_len, kv_len, group_size, s_frag);
+            //bring it back up afterwards
+            __builtin_amdgcn_s_setprio(2);
 
             __builtin_amdgcn_sched_barrier(0);
             // apply mask
