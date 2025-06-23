@@ -2393,7 +2393,7 @@ __global__
         auto block = cg::this_thread_block();
         const uint32_t kv_chunk_size = *(params.kv_chunk_size_ptr);
 
-        const uint32_t bx = blockIdx.x, lane_idx = threadIdx.x % CUDA_WARP_SIZE, real_lane_idx = threadIdx.x,
+        const uint32_t bx = gridDim.x - 1 - blockIdx.x, lane_idx = threadIdx.x % CUDA_WARP_SIZE, real_lane_idx = threadIdx.x,
                        warp_idx = get_warp_idx<NUM_WARPS_Q, NUM_WARPS_KV>(), kv_head_idx = blockIdx.z;
 
         if (block_valid_mask && !block_valid_mask[bx])
