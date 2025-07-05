@@ -632,3 +632,72 @@ def gen_customize_single_prefill_module(module_name, *args):
         write_if_different(path, source)
 
     return load_cuda_ops(module_name, source_paths)
+
+
+def get_aiter_decode_uri(*,
+                         dtype_q: torch.dtype,
+                         dtype_kv: torch.dtype,
+                         dtype_o: torch.dtype,
+                         # dtype_idx: torch.dtype,
+                         head_dim: int,
+                         block_size: int,
+                         alibi_enabled: bool,
+                         logits_soft_cap_enabled: bool,
+                         gqa_ratio: int,
+                         # pos_encoding_mode: int,
+                         # use_sliding_window: bool,
+                         # use_logits_soft_cap: bool,
+                         # use_fp16_qk_reduction: bool,
+                         ):
+    return (
+        f"aiter_decode_"
+        f"dtype_q_{filename_safe_dtype_map[dtype_q]}_"
+        f"dtype_kv_{filename_safe_dtype_map[dtype_kv]}_"
+        f"dtype_o_{filename_safe_dtype_map[dtype_o]}_"
+        f"head_dim_{head_dim}_"
+        f"page_size_{block_size}_"
+        f"alibi_enabled_{str(alibi_enabled)[0]}_"
+        f"logits_soft_cap_enabled_{str(logits_soft_cap_enabled)[0]}_"
+        f"gqa_ratio_{gqa_ratio}_"
+    )
+
+
+_aiter_default_kwargs = {
+    'dtype_q': torch.bfloat16,
+    'dtype_kv': torch.bfloat16,
+    'block_size': 1,
+    'head_dim': 128,
+    'dtype_o': torch.bfloat16,
+    'alibi_enabled': True,
+    'logits_soft_cap_enabled': True,
+    'gqa_ratio': 1,
+}
+
+
+def gen_aiter_decode_module(**kwargs):
+    from .aiter_decode_templ import suffix_template_dict, _FUNC_NAME, _FUNC_ARGS, _PAGED_ATTN_SRC, _REDUCE_SRC, _UTIL_SRC
+    gen_directory = FLASHINFER_GEN_SRC_DIR
+    uri = get_aiter_decode_uri(**kwargs)
+    template_kwargs = {
+        'func_name': _FUNC_NAME,
+        'func_args': _FUNC_ARGS,
+        'util_src': _UTIL_SRC,
+        'paged_attn_kernel': _PAGED_ATTN_SRC,
+        'reduce_kernel': _REDUCE_SRC,
+        'query_dtype': dtype_map[kwargs["dtype_q"]],
+        'key_value_dtype': dtype_map[kwargs["dtype_kv"]],
+        # 'kvcache_dtype': kwargs["dtype_kv"],
+        'block_size': kwargs["block_size"],
+        'head_size': kwargs["head_dim"],
+        'out_dtype': dtype_map[kwargs["dtype_o"]],
+        'alibi_enabled': int(kwargs["alibi_enabled"]),
+        'logits_soft_cap_enabled': int(kwargs["logits_soft_cap_enabled"]),
+        'gqa_ratio': int(kwargs["gqa_ratio"])
+    }
+    paths_sources = [
+        ((gen_directory / f"{uri}{suffix}"), jinja2.Template(template).render(**template_kwargs))
+        for suffix, template in suffix_template_dict.items()
+    ]
+    for path, source in paths_sources:
+        write_if_different(path, source)
+    return load_cuda_ops(uri, [path for path, _ in paths_sources], verbose=True)
